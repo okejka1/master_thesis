@@ -1,0 +1,25 @@
+# ── Dataset ───────────────────────────────────────────────────────────────────
+dataset: CIFAR10        # "CIFAR10" | "CIFAR100"
+data_root: ./data
+
+# Checkpoints — override via CLI when running on Colab with Google Drive:
+#   python train.py --config configs/cifar10.yaml \
+#                   --checkpoint-dir /content/drive/MyDrive/master_thesis/checkpoints
+checkpoint_dir: ./checkpoints
+
+# ── Training hyper-parameters ─────────────────────────────────────────────────
+batch_size: 128
+num_epochs: 100
+lr: 0.1
+momentum: 0.9
+weight_decay: 5.0e-4
+lr_milestones: [50, 75]
+lr_gamma: 0.1
+seed: 42
+
+# ── Unlearning ────────────────────────────────────────────────────────────────
+# forget_strategy: "random"  → forget a random fraction of train set
+#                  "class"   → forget all samples of a given class
+forget_strategy: random
+forget_fraction: 0.01   # fraction of train set  (active when strategy=random)
+forget_class: 0         # class index to forget   (active when strategy=class)

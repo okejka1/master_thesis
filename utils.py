@@ -1,7 +1,27 @@
+"""
+Shared utilities for Machine Unlearning experiments.
+
+Contents:
+    - STATS           : normalisation constants for CIFAR-10 / CIFAR-100
+    - set_seed()      : reproducibility helper
+    - get_datasets()  : loads CIFAR train/test datasets with standard transforms
+    - evaluate()      : loss + accuracy on a DataLoader
+    - per_class_accuracy() : per-class accuracy tensor
+    - save_checkpoint / load_checkpoint : checkpoint I/O
+"""
+
+import random
+import numpy as np
 import torch
 import torch.nn as nn
-import torchvision.models as models
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
 
+from models import build_resnet18
+
+
+# ── Normalisation statistics ──────────────────────────────────────────────────
 
 STATS = {
     "CIFAR10":  {"mean": (0.4914, 0.4822, 0.4465),
@@ -10,39 +30,80 @@ STATS = {
                  "std":  (0.2675, 0.2565, 0.2761)},
 }
 
-# MODEL
-def build_resnet18(num_classes: int, cifar_head: bool = True) -> nn.Module:
+
+# ── Reproducibility ──────────────────────────────────────────────────────────
+
+def set_seed(seed: int = 42) -> None:
+    """Set random seeds for full reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+# ── Dataset helpers ───────────────────────────────────────────────────────────
+
+def get_datasets(dataset: str,
+                 data_root: str = "./data",
+                 download: bool = True):
     """
-    Returns a ResNet-18 adapted for CIFAR (32x32) input.
+    Load CIFAR-10 or CIFAR-100 with standard augmentation.
 
     Parameters
     ----------
-    num_classes : int
-        10 for CIFAR-10, 100 for CIFAR-100.
-    cifar_head : bool
-        If True, replaces the 7x7/stride-2 stem with a 3x3/stride-1 conv
-        and removes the initial max-pool — standard for CIFAR benchmarks.
+    dataset : str
+        ``"CIFAR10"`` or ``"CIFAR100"``.
+    data_root : str
+        Directory to download / cache datasets.
+    download : bool
+        Whether to download the dataset if not present.
 
     Returns
     -------
-    nn.Module
-        ResNet-18 with the correct output head for the given dataset.
+    (train_dataset, test_dataset)
+        ``torchvision.datasets`` with the appropriate transforms applied.
     """
-    model = models.resnet18(weights=None)   # always train/load from scratch
+    mean, std = STATS[dataset]["mean"], STATS[dataset]["std"]
 
-    if cifar_head:
-        model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1,
-                                padding=1, bias=False)
-        model.maxpool = nn.Identity()
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std),
+    ])
 
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    return model
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std),
+    ])
+
+    DatasetClass = (torchvision.datasets.CIFAR10 if dataset == "CIFAR10"
+                    else torchvision.datasets.CIFAR100)
+
+    train_ds = DatasetClass(root=data_root, train=True,  download=download,
+                            transform=train_transform)
+    test_ds  = DatasetClass(root=data_root, train=False, download=download,
+                            transform=test_transform)
+
+    return train_ds, test_ds
 
 
-# EVAL
+def get_test_transform(dataset: str):
+    """Return the deterministic (no augmentation) transform for evaluation."""
+    mean, std = STATS[dataset]["mean"], STATS[dataset]["std"]
+    return transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std),
+    ])
+
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+
 @torch.no_grad()
 def evaluate(model: nn.Module,
-             loader: torch.utils.data.DataLoader,
+             loader: DataLoader,
              criterion: nn.Module,
              device: torch.device) -> tuple[float, float]:
     """
@@ -70,7 +131,7 @@ def evaluate(model: nn.Module,
 
 @torch.no_grad()
 def per_class_accuracy(model: nn.Module,
-                       loader: torch.utils.data.DataLoader,
+                       loader: DataLoader,
                        num_classes: int,
                        device: torch.device) -> torch.Tensor:
     """
@@ -104,7 +165,7 @@ def load_checkpoint(checkpoint_path: str,
     Load a saved checkpoint and return the model ready for use.
 
     The checkpoint must have been saved with the structure produced by
-    the training notebook (keys: model_state, num_classes, epoch, etc.).
+    the training script (keys: model_state, num_classes, epoch, etc.).
 
     Parameters
     ----------
