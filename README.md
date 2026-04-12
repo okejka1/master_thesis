@@ -111,8 +111,8 @@ All hyperparameters live in `configs/*.yaml`. Any value can be overridden at run
 |---|---|---|
 | `train.py` | Baseline ResNet-18 training | ✅ |
 | `unlearn_naive.py` | Naive retrain-from-scratch | ✅ |
-| `unlearn_finetune.py` | Fine-tuning on retain set | 🔜 |
-| `unlearn_fisher.py` | Fisher forgetting | 🔜 |
+|  | SISA | 🔜 |
+|  | Gradient-based method | 🔜 |
 
 ---
 
