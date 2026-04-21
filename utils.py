@@ -218,3 +218,123 @@ def save_checkpoint(model: nn.Module,
 
     torch.save(payload, path)
     print(f"Saved checkpoint → {path}")
+
+
+# ── SISA helpers ──────────────────────────────────────────────────────────────
+
+def stratified_shard(targets: list | np.ndarray,
+                     num_shards: int,
+                     seed: int = 42) -> list[list[int]]:
+    """
+    Partition dataset indices into ``num_shards`` disjoint shards while
+    preserving class proportions in each shard (stratified split).
+
+    Parameters
+    ----------
+    targets : list or ndarray
+        Class labels for the full training set (length N).
+    num_shards : int
+        Number of disjoint shards (S).
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    list[list[int]]
+        A list of ``num_shards`` index lists, each containing the indices
+        belonging to that shard.
+    """
+    rng = np.random.RandomState(seed)
+    targets = np.asarray(targets)
+    num_classes = int(targets.max()) + 1
+
+    # Collect indices per class, then shuffle
+    class_indices = []
+    for c in range(num_classes):
+        idx = np.where(targets == c)[0]
+        rng.shuffle(idx)
+        class_indices.append(idx)
+
+    # Distribute each class's indices round-robin across shards
+    shards: list[list[int]] = [[] for _ in range(num_shards)]
+    for idx_arr in class_indices:
+        chunks = np.array_split(idx_arr, num_shards)
+        for s in range(num_shards):
+            shards[s].extend(chunks[s].tolist())
+
+    # Shuffle within each shard
+    for s in range(num_shards):
+        rng.shuffle(shards[s])
+
+    return shards
+
+
+@torch.no_grad()
+def ensemble_evaluate(models: list[nn.Module],
+                      loader: DataLoader,
+                      criterion: nn.Module,
+                      device: torch.device,
+                      method: str = "soft_vote") -> tuple[float, float]:
+    """
+    Evaluate an ensemble of models using either soft voting or majority voting.
+
+    Parameters
+    ----------
+    models : list[nn.Module]
+        List of shard models (all in eval mode).
+    loader : DataLoader
+        Test/evaluation data loader.
+    criterion : nn.Module
+        Loss function (applied to the averaged logits for soft_vote).
+    device : torch.device
+    method : str
+        ``"soft_vote"``    — average softmax probabilities, then argmax.
+        ``"majority_vote"`` — each model votes for a class, majority wins.
+
+    Returns
+    -------
+    (avg_loss, accuracy_percent) : tuple[float, float]
+    """
+    for m in models:
+        m.eval()
+
+    total_loss, correct, total = 0.0, 0, 0
+
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+
+        if method == "soft_vote":
+            # Average softmax probabilities across all shard models
+            avg_probs = None
+            for m in models:
+                logits = m(images)
+                probs = torch.softmax(logits, dim=1)
+                avg_probs = probs if avg_probs is None else avg_probs + probs
+            avg_probs /= len(models)
+
+            # Compute loss on averaged log-probs
+            loss = criterion(torch.log(avg_probs + 1e-12), labels)
+            preds = avg_probs.argmax(dim=1)
+
+        elif method == "majority_vote":
+            # Each model casts a vote; pick the majority
+            all_preds = []
+            for m in models:
+                logits = m(images)
+                all_preds.append(logits.argmax(dim=1))
+            # Stack → (num_models, batch) and take mode along dim 0
+            stacked = torch.stack(all_preds, dim=0)
+            preds = torch.mode(stacked, dim=0).values
+
+            # Loss: use the first model's logits as a proxy (no clean loss for majority vote)
+            loss = criterion(models[0](images), labels)
+
+        else:
+            raise ValueError(f"Unknown aggregation method: {method!r}")
+
+        total_loss += loss.item() * images.size(0)
+        correct    += preds.eq(labels).sum().item()
+        total      += images.size(0)
+
+    return total_loss / total, 100.0 * correct / total
+

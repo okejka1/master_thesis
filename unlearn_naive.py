@@ -266,6 +266,7 @@ def main():
           f"{'Test Loss':>9}  {'Test Acc':>8}  {'Time':>6}")
     print("-" * 78)
 
+    unlearn_start = time.time()
     for epoch in range(1, cfg["num_epochs"] + 1):
         t0 = time.time()
 
@@ -286,6 +287,8 @@ def main():
               f"{tr_loss:>11.4f}  {tr_acc:>9.2f}%  "
               f"{te_loss:>9.4f}  {te_acc:>7.2f}%  {elapsed:>5.1f}s")
 
+        unlearn_time = time.time() - unlearn_start
+
         if te_acc > best_naive_acc:
             best_naive_acc = te_acc
             save_checkpoint(
@@ -299,6 +302,7 @@ def main():
                     "retain_size":       len(retain_indices),
                     "history":           naive_history,
                     "config":            cfg,
+                    "unlearn_time_s":    unlearn_time
                 }
             )
 

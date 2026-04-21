@@ -165,6 +165,7 @@ def main():
                               f"resnet18_{ds_tag}_final.pth")
 
     # ── Training ───────────────────────────────────────────────────────────────
+    start_time = time.time()
     best_acc = 0.0
     history  = {"train_loss": [], "train_acc": [],
                  "test_loss":  [], "test_acc":  []}
@@ -194,16 +195,19 @@ def main():
               f"{tr_loss:>10.4f}  {tr_acc:>8.2f}%  "
               f"{te_loss:>9.4f}  {te_acc:>7.2f}%  {elapsed:>5.1f}s")
 
-        if te_acc > best_acc:
-            best_acc = te_acc
-            save_checkpoint(
-                model, best_ckpt,
-                epoch=epoch, test_acc=te_acc,
-                dataset=dataset, num_classes=num_classes,
-                extra={"optim_state": optimizer.state_dict(),
-                       "history":     history,
-                       "config":      cfg},
-            )
+    total_time = time.time() - start_time
+
+    if te_acc > best_acc:
+        best_acc = te_acc
+        save_checkpoint(
+            model, best_ckpt,
+            epoch=epoch, test_acc=te_acc,
+            dataset=dataset, num_classes=num_classes,
+            extra={"optim_state": optimizer.state_dict(),
+                   "history":     history,
+                   "config":      cfg,
+                   "train_time_s": total_time},
+        )
 
     # Save final checkpoint regardless of accuracy
     save_checkpoint(
@@ -212,7 +216,8 @@ def main():
         dataset=dataset, num_classes=num_classes,
         extra={"optim_state": optimizer.state_dict(),
                "history":     history,
-               "config":      cfg},
+               "config":      cfg,
+               "train_time_s": total_time},
     )
 
     print(f"\nTraining complete.")
