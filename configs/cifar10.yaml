@@ -23,3 +23,8 @@ seed: 42
 forget_strategy: random
 forget_fraction: 0.01   # fraction of train set  (active when strategy=random)
 forget_class: 0         # class index to forget   (active when strategy=class)
+
+# ── SISA parameters ──────────────────────────────────────────────────────────
+sisa_shards: 5          # number of disjoint data shards (S)
+sisa_slices: 10         # number of sequential slices per shard (R)
+sisa_aggregation: soft_vote   # "soft_vote" | "majority_vote"
