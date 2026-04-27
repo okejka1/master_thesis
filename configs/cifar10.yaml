@@ -28,3 +28,22 @@ forget_class: 0         # class index to forget   (active when strategy=class)
 sisa_shards: 5          # number of disjoint data shards (S)
 sisa_slices: 10         # number of sequential slices per shard (R)
 sisa_aggregation: soft_vote   # "soft_vote" | "majority_vote"
+
+# ── ∇τ Gradient-based Unlearning ─────────────────────────────────────────────
+# Paper: arxiv.org/abs/2403.14339 — Trippa et al., 2024
+#
+# Loss: L = α·ReLU(L_Dv − L_Df)² + (1−α)·L_Dr
+#   L_Df  = batch loss on forget set  (gradient ascent / unlearning)
+#   L_Dr  = batch loss on retain set  (gradient descent / preservation)
+#   L_Dv  = mean loss on validation set (adaptive target)
+#   α     = balance weight, linearly decayed to 0 over all steps
+#
+# Rule of thumb (paper §6.4): α_init ≈ (5/3) × |D_f|/|D_train|
+# For forget_fraction=0.10 → α≈0.17; for 0.30 → α≈0.50
+grad_tau_forget_epochs: 10       # number of "forget-set epochs" to run unlearning
+                                  # paper uses ~1/10 of pre-training epochs
+grad_tau_alpha: 0.5              # initial α (decayed linearly to 0 over all steps)
+grad_tau_lr: 1.0e-4              # AdamW learning rate for the unlearning optimizer
+grad_tau_weight_decay: 1.0e-4   # AdamW weight decay
+grad_tau_val_fraction: 0.1      # fraction of retain set held out as validation
+grad_tau_recompute_val_every: 1  # recompute L_Dv every N forget-epochs (c in paper)
