@@ -31,6 +31,7 @@ CLI overrides (all optional — default to values in the YAML config):
 """
 
 import argparse
+import json
 import os
 import random
 import time
@@ -44,6 +45,7 @@ from torch.utils.data import DataLoader, Subset
 from models import build_resnet18
 from utils import (STATS, evaluate, get_datasets, get_test_transform,
                    load_checkpoint, save_checkpoint, set_seed)
+from mia import run_mia_suite
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -240,6 +242,10 @@ def main():
     print(f"{'Forget':<15} {orig_forget_loss:>8.4f}  {orig_forget_acc:>8.2f}%")
     print(f"{'Test':<15} {orig_test_loss:>8.4f}  {orig_test_acc:>8.2f}%")
 
+    print("\nMIA evaluation on original model (5-fold CV):")
+    orig_mia = run_mia_suite(original_model, forget_loader, test_loader, device,
+                             label="Original", seed=cfg["seed"])
+
     # ── Naive unlearning: retrain from scratch on retain set ───────────────────
     print(f"\nRetraining fresh model on retain set "
           f"({len(retain_indices):,} samples) for {cfg['num_epochs']} epochs...\n")
@@ -317,23 +323,67 @@ def main():
     naive_forget_loss, naive_forget_acc = evaluate(naive_model, forget_loader,      criterion, device)
     naive_test_loss,   naive_test_acc   = evaluate(naive_model, test_loader,        criterion, device)
 
-    # ── Side-by-side comparison ────────────────────────────────────────────────
-    print(f"\n{'='*62}")
-    print(f"{'Metric':<20} {'Original':>12}  {'Naive Retrain':>14}  {'Δ':>6}")
-    print(f"{'='*62}")
+    print("\nMIA evaluation on naive-retrained model (5-fold CV):")
+    new_mia = run_mia_suite(naive_model, forget_loader, test_loader, device,
+                            label="Naive Retrain", seed=cfg["seed"])
 
-    rows = [
+    # ── Side-by-side comparison ────────────────────────────────────────────────
+    print(f"\n{'='*68}")
+    print(f"{'Metric':<22} {'Original':>12}  {'Naive Retrain':>14}  {'Δ':>6}")
+    print(f"{'='*68}")
+
+    acc_rows = [
         ("Retain Accuracy", orig_retain_acc, naive_retain_acc),
         ("Forget Accuracy", orig_forget_acc, naive_forget_acc),
         ("Test Accuracy",   orig_test_acc,   naive_test_acc),
     ]
-    for name, orig, naive in rows:
-        delta = naive - orig
+    for name, before, after in acc_rows:
+        delta = after - before
         sign  = "+" if delta >= 0 else ""
-        print(f"{name:<20} {orig:>11.2f}%  {naive:>13.2f}%  {sign}{delta:>5.2f}%")
+        print(f"{name:<22} {before:>11.2f}%  {after:>13.2f}%  {sign}{delta:>5.2f}%")
 
-    print(f"{'='*62}")
+    mia_rows = [
+        ("MIA_L (loss)",    orig_mia["mia_l"], new_mia["mia_l"]),
+        ("MIA_E (entropy)", orig_mia["mia_e"], new_mia["mia_e"]),
+    ]
+    print("-" * 68)
+    for name, before, after in mia_rows:
+        delta = after - before
+        sign  = "+" if delta >= 0 else ""
+        print(f"{name:<22} {before*100:>11.2f}%  {after*100:>13.2f}%  "
+              f"{sign}{delta*100:>5.2f}%   (ideal: 50%)")
+
+    print(f"{'='*68}")
     print(f"\nBest naive checkpoint: {naive_best_ckpt}")
+
+    # ── Save JSON results ─────────────────────────────────────────────────────
+    results = {
+        "dataset":          dataset,
+        "method":           "naive_retrain",
+        "forget_strategy":  cfg["forget_strategy"],
+        "forget_size":      len(forget_indices),
+        "retain_size":      len(retain_indices),
+        "unlearn_time_s":   unlearn_time,
+        "before": {
+            "test_acc":   orig_test_acc,
+            "retain_acc": orig_retain_acc,
+            "forget_acc": orig_forget_acc,
+            "mia_l":      orig_mia["mia_l"],
+            "mia_e":      orig_mia["mia_e"],
+        },
+        "after": {
+            "test_acc":   naive_test_acc,
+            "retain_acc": naive_retain_acc,
+            "forget_acc": naive_forget_acc,
+            "mia_l":      new_mia["mia_l"],
+            "mia_e":      new_mia["mia_e"],
+        },
+    }
+    results_path = os.path.join(cfg["checkpoint_dir"],
+                                f"naive_{ds_tag}_results.json")
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2, default=str)
+    print(f"\n  Results saved → {results_path}")
 
 
 if __name__ == "__main__":

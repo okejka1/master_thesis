@@ -44,6 +44,7 @@ from utils import (
     save_checkpoint,
     set_seed,
 )
+from mia import run_mia_suite
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -133,20 +134,6 @@ def build_indices(train_dataset,
 
     return forget_indices, retain_train_indices, val_indices
 
-
-# ── MIA Evaluation (Stub) ─────────────────────────────────────────────────────
-
-def mia_attack(model, forget_loader, test_loader, device, method="loss") -> float | None:
-    """
-    Placeholder for Membership Inference Attack (MIA) evaluation.
-    Paper: Evaluates MIA_L (loss-based) and MIA_E (entropy-based) by training a
-           Logistic Classifier to differentiate forget set vs test set.
-    TODO: Implement full MIA evaluation. Returns None for now.
-    """
-    # Paper uses a logistic regression model to distinguish between D_forget and D_test
-    # based on either Loss values or Output Entropy.
-    # An ideal unlearning score is 50% (random guessing).
-    return None
 
 
 @torch.no_grad()
@@ -360,6 +347,10 @@ def main():
     print(f"{'Forget':<15} {orig_forget_loss:>8.4f}  {orig_forget_acc:>8.2f}%")
     print(f"{'Test':<15} {orig_test_loss:>8.4f}  {orig_test_acc:>8.2f}%")
 
+    print("\nMIA evaluation on original model (5-fold CV):")
+    orig_mia = run_mia_suite(model, forget_eval_loader, test_loader, device,
+                             label="Original", seed=cfg["seed"])
+
     # ── ∇τ Unlearning ──────────────────────────────────────────────────────────
     unlearn_start = time.time()
 
@@ -391,22 +382,37 @@ def main():
     new_forget_loss, new_forget_acc = evaluate(model, forget_eval_loader,     criterion, device)
     new_test_loss,   new_test_acc   = evaluate(model, test_loader,            criterion, device)
 
-    # ── Side-by-side comparison ────────────────────────────────────────────────
-    print(f"\n{'='*62}")
-    print(f"{'Metric':<20} {'Original':>12}  {'∇τ Unlearned':>14}  {'Δ':>6}")
-    print(f"{'='*62}")
+    print("\nMIA evaluation on unlearned model (5-fold CV):")
+    new_mia = run_mia_suite(model, forget_eval_loader, test_loader, device,
+                            label="Unlearned", seed=cfg["seed"])
 
-    rows = [
+    # ── Side-by-side comparison ────────────────────────────────────────────────
+    print(f"\n{'='*68}")
+    print(f"{'Metric':<22} {'Original':>12}  {'∇τ Unlearned':>14}  {'Δ':>6}")
+    print(f"{'='*68}")
+
+    acc_rows = [
         ("Retain Accuracy", orig_retain_acc, new_retain_acc),
         ("Forget Accuracy", orig_forget_acc, new_forget_acc),
         ("Test Accuracy",   orig_test_acc,   new_test_acc),
     ]
-    for name, orig, new in rows:
-        delta = new - orig
+    for name, before, after in acc_rows:
+        delta = after - before
         sign  = "+" if delta >= 0 else ""
-        print(f"{name:<20} {orig:>11.2f}%  {new:>13.2f}%  {sign}{delta:>5.2f}%")
+        print(f"{name:<22} {before:>11.2f}%  {after:>13.2f}%  {sign}{delta:>5.2f}%")
 
-    print(f"{'='*62}")
+    mia_rows = [
+        ("MIA_L (loss)",    orig_mia["mia_l"], new_mia["mia_l"]),
+        ("MIA_E (entropy)", orig_mia["mia_e"], new_mia["mia_e"]),
+    ]
+    print("-" * 68)
+    for name, before, after in mia_rows:
+        delta = after - before
+        sign  = "+" if delta >= 0 else ""
+        print(f"{name:<22} {before*100:>11.2f}%  {after*100:>13.2f}%  "
+              f"{sign}{delta*100:>5.2f}%   (ideal: 50%)")
+
+    print(f"{'='*68}")
 
     # ── Save checkpoint & results ──────────────────────────────────────────────
     out_ckpt = os.path.join(cfg["checkpoint_dir"], f"resnet18_{ds_tag}_grad_tau_unlearn.pth")
@@ -438,13 +444,16 @@ def main():
             "test_acc":    orig_test_acc,
             "retain_acc":  orig_retain_acc,
             "forget_acc":  orig_forget_acc,
+            "mia_l":       orig_mia["mia_l"],
+            "mia_e":       orig_mia["mia_e"],
         },
         "after": {
             "test_acc":    new_test_acc,
             "retain_acc":  new_retain_acc,
             "forget_acc":  new_forget_acc,
-            "mia_score":   mia_attack(model, forget_eval_loader, test_loader, device), # stub
-        }
+            "mia_l":       new_mia["mia_l"],
+            "mia_e":       new_mia["mia_e"],
+        },
     }
     
     results_path = os.path.join(cfg["checkpoint_dir"], f"grad_tau_{ds_tag}_results.json")

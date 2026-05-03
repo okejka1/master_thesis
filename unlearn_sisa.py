@@ -61,6 +61,7 @@ from utils import (
     set_seed,
     stratified_shard,
 )
+from mia import run_mia_suite_ensemble
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -466,6 +467,11 @@ def main():
     print(f"{'Forget':<15} {orig_forget_loss:>8.4f}  {orig_forget_acc:>8.2f}%")
     print(f"{'Test':<15} {orig_test_loss:>8.4f}  {orig_test_acc:>8.2f}%")
 
+    print("\nMIA evaluation on original ensemble (5-fold CV):")
+    orig_mia = run_mia_suite_ensemble(
+        original_models, forget_loader, test_loader, device,
+        aggregation=aggregation, label="Original", seed=cfg["seed"])
+
     # ── Identify affected shards ──────────────────────────────────────────────
     affected_shards = []
     for s, shard_idx in enumerate(shards):
@@ -521,21 +527,37 @@ def main():
     new_forget_loss, new_forget_acc = ensemble_evaluate(
         updated_models, forget_loader, ens_criterion, device, aggregation)
 
+    print("\nMIA evaluation on updated ensemble (5-fold CV):")
+    new_mia = run_mia_suite_ensemble(
+        updated_models, forget_loader, test_loader, device,
+        aggregation=aggregation, label="After SISA", seed=cfg["seed"])
+
     # ── Side-by-side comparison ───────────────────────────────────────────────
     print(f"\n{'='*68}")
-    print(f"{'Metric':<20} {'Before SISA':>12}  {'After SISA':>12}  {'Δ':>6}")
+    print(f"{'Metric':<22} {'Before SISA':>12}  {'After SISA':>12}  {'\u0394':>6}")
     print(f"{'='*68}")
 
-    rows = [
+    acc_rows = [
         ("Retain Accuracy", orig_retain_acc, new_retain_acc),
         ("Forget Accuracy", orig_forget_acc, new_forget_acc),
         ("Test Accuracy",   orig_test_acc,   new_test_acc),
     ]
-    for name, before, after in rows:
+    for name, before, after in acc_rows:
         delta = after - before
         sign  = "+" if delta >= 0 else ""
-        print(f"{name:<20} {before:>11.2f}%  {after:>11.2f}%  "
+        print(f"{name:<22} {before:>11.2f}%  {after:>11.2f}%  "
               f"{sign}{delta:>5.2f}%")
+
+    mia_rows = [
+        ("MIA_L (loss)",    orig_mia["mia_l"], new_mia["mia_l"]),
+        ("MIA_E (entropy)", orig_mia["mia_e"], new_mia["mia_e"]),
+    ]
+    print("-" * 68)
+    for name, before, after in mia_rows:
+        delta = after - before
+        sign  = "+" if delta >= 0 else ""
+        print(f"{name:<22} {before*100:>11.2f}%  {after*100:>11.2f}%  "
+              f"{sign}{delta*100:>5.2f}%   (ideal: 50%)")
 
     # Load initial training time for metadata
     sisa_meta_path = os.path.join(sisa_dir, "ensemble_meta.json")
@@ -568,11 +590,15 @@ def main():
             "test_acc":    orig_test_acc,
             "retain_acc":  orig_retain_acc,
             "forget_acc":  orig_forget_acc,
+            "mia_l":       orig_mia["mia_l"],
+            "mia_e":       orig_mia["mia_e"],
         },
         "after": {
             "test_acc":    new_test_acc,
             "retain_acc":  new_retain_acc,
             "forget_acc":  new_forget_acc,
+            "mia_l":       new_mia["mia_l"],
+            "mia_e":       new_mia["mia_e"],
         },
         "shard_stats":      all_stats,
     }
