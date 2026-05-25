@@ -202,8 +202,13 @@ def train_shard(shard_id: int,
                           weight_decay=cfg["weight_decay"],
                           nesterov=True)
 
-    # We compute LR milestones relative to total epochs across all slices
+    # Single scheduler for the entire shard — milestones span total epochs
     total_epochs_so_far = 0
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=cfg["lr_milestones"],
+        gamma=cfg["lr_gamma"],
+    )
 
     for slice_id, cum_indices in enumerate(cumulative_slices):
         slice_loader = DataLoader(
@@ -217,14 +222,6 @@ def train_shard(shard_id: int,
         print(f"\n  Slice {slice_id}/{num_slices - 1}  "
               f"({len(cum_indices)} cumulative samples)  "
               f"→ {epochs_per_slice} epochs")
-
-        # Create a fresh scheduler for this slice segment
-        scheduler = optim.lr_scheduler.MultiStepLR(
-            optimizer,
-            milestones=cfg["lr_milestones"],
-            gamma=cfg["lr_gamma"],
-            last_epoch=total_epochs_so_far - 1 if total_epochs_so_far > 0 else -1,
-        )
 
         for epoch in range(1, epochs_per_slice + 1):
             total_epochs_so_far += 1

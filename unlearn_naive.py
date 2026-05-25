@@ -10,10 +10,6 @@ Usage
 # Locally:
     python unlearn_naive.py --config configs/cifar10.yaml
 
-# On Google Colab (override dirs to Google Drive):
-    !python unlearn_naive.py --config configs/cifar10.yaml \\
-                             --checkpoint-dir /content/drive/MyDrive/master_thesis/checkpoints
-
 # Override forget strategy:
     !python unlearn_naive.py --config configs/cifar10.yaml --forget-strategy class --forget-class 3
 
@@ -157,6 +153,14 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _write_results(path: str, payload: dict) -> None:
+    """Atomically write results JSON (write to tmp then rename)."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+    os.replace(tmp, path)
+
+
 def main():
     args = parse_args()
     cfg  = merge(load_config(args.config), args)
@@ -173,6 +177,29 @@ def main():
     original_ckpt = (args.original_ckpt
                      or os.path.join(cfg["checkpoint_dir"],
                                      f"resnet18_{ds_tag}_best.pth"))
+
+    results_path  = os.path.join(cfg["checkpoint_dir"], f"naive_{ds_tag}_results.json")
+    naive_best_ckpt = os.path.join(cfg["checkpoint_dir"],
+                                   f"resnet18_{ds_tag}_naive_unlearn_best.pth")
+
+    # ── Resume logic ───────────────────────────────────────────────────────────
+    # status="complete"           → skip entirely (MIA already done)
+    # status="training_complete"  → skip retraining, redo only eval + MIA
+    _skip_training = False
+    _partial: dict = {}
+    if os.path.exists(results_path):
+        try:
+            with open(results_path) as _f:
+                _partial = json.load(_f)
+        except Exception:
+            _partial = {}
+        _status = _partial.get("status", "")
+        if _status == "complete":
+            print(f"[naive] Results already complete → {results_path}")
+            return
+        if _status == "training_complete" and os.path.exists(naive_best_ckpt):
+            print(f"[naive] Training already done; resuming from evaluation step.")
+            _skip_training = True
 
     print(f"{'='*65}")
     print(f"  Naive Unlearning — {dataset}")
@@ -247,72 +274,106 @@ def main():
                              label="Original", seed=cfg["seed"])
 
     # ── Naive unlearning: retrain from scratch on retain set ───────────────────
-    print(f"\nRetraining fresh model on retain set "
-          f"({len(retain_indices):,} samples) for {cfg['num_epochs']} epochs...\n")
+    if _skip_training:
+        # Training was already completed in a previous session; reload partial data.
+        print("[naive] Skipping training (loading from previous training_complete state).")
+        unlearn_time   = _partial.get("unlearn_time_s", 0.0)
+        orig_test_acc  = _partial["before"]["test_acc"]
+        orig_retain_acc= _partial["before"]["retain_acc"]
+        orig_forget_acc= _partial["before"]["forget_acc"]
+        orig_mia       = {"mia_l": _partial["before"].get("mia_l"),
+                          "mia_e": _partial["before"].get("mia_e")}
+    else:
+        print(f"\nRetraining fresh model on retain set "
+              f"({len(retain_indices):,} samples) for {cfg['num_epochs']} epochs...\n")
 
-    naive_model     = build_resnet18(num_classes).to(device)
-    naive_optimizer = optim.SGD(naive_model.parameters(),
-                                lr=cfg["lr"], momentum=cfg["momentum"],
-                                weight_decay=cfg["weight_decay"], nesterov=True)
-    naive_scheduler = optim.lr_scheduler.MultiStepLR(naive_optimizer,
-                                                     milestones=cfg["lr_milestones"],
-                                                     gamma=cfg["lr_gamma"])
+        naive_model     = build_resnet18(num_classes).to(device)
+        naive_optimizer = optim.SGD(naive_model.parameters(),
+                                    lr=cfg["lr"], momentum=cfg["momentum"],
+                                    weight_decay=cfg["weight_decay"], nesterov=True)
+        naive_scheduler = optim.lr_scheduler.MultiStepLR(naive_optimizer,
+                                                         milestones=cfg["lr_milestones"],
+                                                         gamma=cfg["lr_gamma"])
 
-    naive_best_ckpt = os.path.join(
-        cfg["checkpoint_dir"],
-        f"resnet18_{ds_tag}_naive_unlearn_best.pth"
-    )
+        naive_history = {"train_loss": [], "train_acc": [],
+                         "test_loss":  [], "test_acc":  []}
+        best_naive_acc = 0.0
 
-    naive_history = {"train_loss": [], "train_acc": [],
-                     "test_loss":  [], "test_acc":  []}
-    best_naive_acc = 0.0
+        print(f"{'Epoch':>6}  {'LR':>8}  "
+              f"{'Retain Loss':>11}  {'Retain Acc':>10}  "
+              f"{'Test Loss':>9}  {'Test Acc':>8}  {'Time':>6}")
+        print("-" * 78)
 
-    print(f"{'Epoch':>6}  {'LR':>8}  "
-          f"{'Retain Loss':>11}  {'Retain Acc':>10}  "
-          f"{'Test Loss':>9}  {'Test Acc':>8}  {'Time':>6}")
-    print("-" * 78)
+        unlearn_start = time.time()
+        for epoch in range(1, cfg["num_epochs"] + 1):
+            t0 = time.time()
 
-    unlearn_start = time.time()
-    for epoch in range(1, cfg["num_epochs"] + 1):
-        t0 = time.time()
+            tr_loss, tr_acc = train_one_epoch(naive_model, retain_loader,
+                                              criterion, naive_optimizer, device)
+            te_loss, te_acc = evaluate(naive_model, test_loader, criterion, device)
+            naive_scheduler.step()
 
-        tr_loss, tr_acc = train_one_epoch(naive_model, retain_loader,
-                                          criterion, naive_optimizer, device)
-        te_loss, te_acc = evaluate(naive_model, test_loader, criterion, device)
-        naive_scheduler.step()
+            naive_history["train_loss"].append(tr_loss)
+            naive_history["train_acc"].append(tr_acc)
+            naive_history["test_loss"].append(te_loss)
+            naive_history["test_acc"].append(te_acc)
 
-        naive_history["train_loss"].append(tr_loss)
-        naive_history["train_acc"].append(tr_acc)
-        naive_history["test_loss"].append(te_loss)
-        naive_history["test_acc"].append(te_acc)
+            current_lr = naive_scheduler.get_last_lr()[0]
+            elapsed    = time.time() - t0
 
-        current_lr = naive_scheduler.get_last_lr()[0]
-        elapsed    = time.time() - t0
+            print(f"{epoch:>6}  {current_lr:>8.5f}  "
+                  f"{tr_loss:>11.4f}  {tr_acc:>9.2f}%  "
+                  f"{te_loss:>9.4f}  {te_acc:>7.2f}%  {elapsed:>5.1f}s")
 
-        print(f"{epoch:>6}  {current_lr:>8.5f}  "
-              f"{tr_loss:>11.4f}  {tr_acc:>9.2f}%  "
-              f"{te_loss:>9.4f}  {te_acc:>7.2f}%  {elapsed:>5.1f}s")
+            unlearn_time = time.time() - unlearn_start
 
-        unlearn_time = time.time() - unlearn_start
+            if te_acc > best_naive_acc:
+                best_naive_acc = te_acc
+                save_checkpoint(
+                    naive_model, naive_best_ckpt,
+                    epoch=epoch, test_acc=te_acc,
+                    dataset=dataset, num_classes=num_classes,
+                    extra={
+                        "unlearning_method": "naive_retrain",
+                        "forget_strategy":   cfg["forget_strategy"],
+                        "forget_size":       len(forget_indices),
+                        "retain_size":       len(retain_indices),
+                        "history":           naive_history,
+                        "config":            cfg,
+                        "unlearn_time_s":    unlearn_time
+                    }
+                )
 
-        if te_acc > best_naive_acc:
-            best_naive_acc = te_acc
-            save_checkpoint(
-                naive_model, naive_best_ckpt,
-                epoch=epoch, test_acc=te_acc,
-                dataset=dataset, num_classes=num_classes,
-                extra={
-                    "unlearning_method": "naive_retrain",
-                    "forget_strategy":   cfg["forget_strategy"],
-                    "forget_size":       len(forget_indices),
-                    "retain_size":       len(retain_indices),
-                    "history":           naive_history,
-                    "config":            cfg,
-                    "unlearn_time_s":    unlearn_time
-                }
-            )
+        print(f"\nRetraining complete. Best test accuracy: {best_naive_acc:.2f}%")
 
-    print(f"\nRetraining complete. Best test accuracy: {best_naive_acc:.2f}%")
+        # ── Phase-1 write: training done, MIA pending ─────────────────────────
+        # Writing now means a session crash during MIA won't force a full retrain.
+        _write_results(results_path, {
+            "status":          "training_complete",
+            "dataset":         dataset,
+            "seed":            cfg["seed"],
+            "forget_fraction": cfg.get("forget_fraction"),
+            "method":          "naive_retrain",
+            "forget_strategy": cfg["forget_strategy"],
+            "forget_size":     len(forget_indices),
+            "retain_size":     len(retain_indices),
+            "unlearn_time_s":  unlearn_time,
+            "before": {
+                "test_acc":   orig_test_acc,
+                "retain_acc": orig_retain_acc,
+                "forget_acc": orig_forget_acc,
+                "mia_l":      orig_mia["mia_l"],
+                "mia_e":      orig_mia["mia_e"],
+            },
+            "after": {
+                "test_acc":   None,
+                "retain_acc": None,
+                "forget_acc": None,
+                "mia_l":      None,
+                "mia_e":      None,
+            },
+        })
+        print(f"  Phase-1 results written → {results_path}")
 
     # ── Evaluate naive model ───────────────────────────────────────────────────
     print("\nLoading best naive unlearned model...")
@@ -356,14 +417,17 @@ def main():
     print(f"{'='*68}")
     print(f"\nBest naive checkpoint: {naive_best_ckpt}")
 
-    # ── Save JSON results ─────────────────────────────────────────────────────
-    results = {
-        "dataset":          dataset,
-        "method":           "naive_retrain",
-        "forget_strategy":  cfg["forget_strategy"],
-        "forget_size":      len(forget_indices),
-        "retain_size":      len(retain_indices),
-        "unlearn_time_s":   unlearn_time,
+    # ── Phase-2 write: fully complete ─────────────────────────────────────────
+    _write_results(results_path, {
+        "status":          "complete",
+        "dataset":         dataset,
+        "seed":            cfg["seed"],
+        "forget_fraction": cfg.get("forget_fraction"),
+        "method":          "naive_retrain",
+        "forget_strategy": cfg["forget_strategy"],
+        "forget_size":     len(forget_indices),
+        "retain_size":     len(retain_indices),
+        "unlearn_time_s":  unlearn_time,
         "before": {
             "test_acc":   orig_test_acc,
             "retain_acc": orig_retain_acc,
@@ -378,11 +442,7 @@ def main():
             "mia_l":      new_mia["mia_l"],
             "mia_e":      new_mia["mia_e"],
         },
-    }
-    results_path = os.path.join(cfg["checkpoint_dir"],
-                                f"naive_{ds_tag}_results.json")
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2, default=str)
+    })
     print(f"\n  Results saved → {results_path}")
 
 

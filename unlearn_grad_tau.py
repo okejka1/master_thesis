@@ -153,21 +153,28 @@ def compute_mean_loss(model, loader, criterion, device) -> float:
 
 # ── ∇τ Training Loop ──────────────────────────────────────────────────────────
 
-def grad_tau_unlearn(model, forget_loader, retain_loader, val_loader,
+def grad_tau_unlearn(model, forget_loader, retain_loader, ref_loader,
                      alpha_init: float, forget_epochs: int,
                      lr: float, weight_decay: float,
                      recompute_val_every: int, device):
     """
     ∇τ unlearning procedure (Algorithm 1 from the paper).
     Modifies `model` in-place.
+
+    Parameters
+    ----------
+    ref_loader : DataLoader
+        Used to compute τ = L_Dv, the TARGET loss the forget set should reach.
+        Must be a loader whose loss is HIGHER than the forget set at the start
+        of unlearning — i.e. data the model was NOT trained on (test set).
+        Using retain training data here is wrong: the model has low loss on
+        both sets, so ReLU(L_Dv − L_Df) ≈ 0 and the ascent term never fires.
     """
-    # Paper uses AdamW
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    criterion_no_reduce = nn.CrossEntropyLoss(reduction='none')
     criterion_reduce = nn.CrossEntropyLoss()
 
     model.train()
-    
+
     # Infinite iterator for retain set to match forget set steps
     def retain_generator():
         while True:
@@ -175,29 +182,30 @@ def grad_tau_unlearn(model, forget_loader, retain_loader, val_loader,
                 yield batch
     retain_iter = retain_generator()
 
-    # Pre-calculate total steps for alpha scheduling
     steps_per_epoch = len(forget_loader)
-    total_steps = forget_epochs * steps_per_epoch
-    
-    alpha = alpha_init
-    current_step = 0
-    L_Dv = 0.0
+    total_steps     = forget_epochs * steps_per_epoch
 
-    print(f"\nStarting ∇τ Unlearning for {forget_epochs} forget-epochs "
-          f"({total_steps} total steps). Initial α={alpha_init:.3f}")
+    alpha    = alpha_init
+    step     = 0
+    tau      = 0.0   # τ in the paper — recomputed every recompute_val_every epochs
+
+    print(f"\nStarting ∇τ Unlearning — {forget_epochs} epochs  "
+          f"({total_steps} steps)  α₀={alpha_init:.4f}")
+    print(f"  τ source : {ref_loader.dataset.__class__.__name__} "
+          f"({len(ref_loader.dataset):,} samples)\n")
 
     for epoch in range(1, forget_epochs + 1):
         t0 = time.time()
-        
-        # Recompute validation loss L_Dv?
+
+        # Recompute τ (L_Dv) from the reference loader
         if (epoch - 1) % recompute_val_every == 0:
-            L_Dv = compute_mean_loss(model, val_loader, criterion_reduce, device)
-            print(f"  [Epoch {epoch}] Recomputed L_Dv (Validation loss) = {L_Dv:.4f}")
+            tau = compute_mean_loss(model, ref_loader, criterion_reduce, device)
             model.train()
+            print(f"  [Epoch {epoch}] τ (ref loss) = {tau:.4f}")
 
         epoch_forget_loss = 0.0
         epoch_retain_loss = 0.0
-        epoch_total_loss = 0.0
+        epoch_relu_active = 0      # how many batches had ReLU > 0
 
         for Xf, Yf in forget_loader:
             Xf, Yf = Xf.to(device), Yf.to(device)
@@ -206,44 +214,50 @@ def grad_tau_unlearn(model, forget_loader, retain_loader, val_loader,
 
             optimizer.zero_grad()
 
-            # L_Df: Forget loss
+            # L_Df computed on EVAL-transformed images so it's comparable to τ
+            # (τ is computed on eval images; using augmented images here would
+            #  inflate L_Df above τ and kill the ReLU every batch)
             out_f = model(Xf)
-            L_Df = criterion_reduce(out_f, Yf)
-            
-            # L_Dr: Retain loss
+            L_Df  = criterion_reduce(out_f, Yf)
+
             out_r = model(Xr)
-            L_Dr = criterion_reduce(out_r, Yr)
+            L_Dr  = criterion_reduce(out_r, Yr)
 
-            # ∇τ Loss formulation: L = α · ReLU(L_Dv − L_Df)² + (1 − α) · L_Dr
-            # Note: The paper says ReLU(L_Dv - L_Df)^2.
-            diff = L_Dv - L_Df
-            diff_relu = F.relu(diff)
-            ascent_term = diff_relu ** 2
+            # L = α · ReLU(τ − L_Df)² + (1 − α) · L_Dr
+            diff      = tau - L_Df          # τ is a Python float → no graph through it
+            relu_diff = F.relu(diff)
+            loss = alpha * relu_diff ** 2 + (1.0 - alpha) * L_Dr
 
-            loss = alpha * ascent_term + (1.0 - alpha) * L_Dr
-            
             loss.backward()
             optimizer.step()
 
             epoch_forget_loss += L_Df.item()
             epoch_retain_loss += L_Dr.item()
-            epoch_total_loss += loss.item()
-            
-            # SchedulerStep(alpha) -> linear decay to 0
-            current_step += 1
-            alpha = alpha_init * (1.0 - current_step / total_steps)
+            if relu_diff.item() > 0:
+                epoch_relu_active += 1
+
+            step  += 1
+            alpha  = alpha_init * max(0.0, 1.0 - step / total_steps)
 
         elapsed = time.time() - t0
-        print(f"  Epoch {epoch:>3} | α: {alpha:.4f} | "
-              f"L_Df (forget): {epoch_forget_loss/steps_per_epoch:.4f} | "
-              f"L_Dr (retain): {epoch_retain_loss/steps_per_epoch:.4f} | "
-              f"Total loss: {epoch_total_loss/steps_per_epoch:.4f} "
-              f"({elapsed:.1f}s)")
-              
+        relu_pct = 100 * epoch_relu_active / steps_per_epoch
+        print(f"  Epoch {epoch:>3} | α={alpha:.4f} | "
+              f"L_Df={epoch_forget_loss/steps_per_epoch:.4f} | "
+              f"L_Dr={epoch_retain_loss/steps_per_epoch:.4f} | "
+              f"ReLU active={relu_pct:.0f}% | {elapsed:.1f}s")
+
     return model
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
+def _write_results(path: str, payload: dict) -> None:
+    """Atomically write results JSON (write to tmp then rename)."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+    os.replace(tmp, path)
+
 
 def main():
     args = parse_args()
@@ -260,6 +274,19 @@ def main():
     original_ckpt = (args.original_ckpt
                      or os.path.join(cfg["checkpoint_dir"],
                                      f"resnet18_{ds_tag}_best.pth"))
+
+    results_path = os.path.join(cfg["checkpoint_dir"], f"grad_tau_{ds_tag}_results.json")
+
+    # ── Resume logic ───────────────────────────────────────────────────────────
+    if os.path.exists(results_path):
+        try:
+            with open(results_path) as _f:
+                _existing = json.load(_f)
+        except Exception:
+            _existing = {}
+        if _existing.get("status") == "complete":
+            print(f"[grad_tau] Results already complete → {results_path}")
+            return
 
     print(f"{'='*65}")
     print(f"  ∇τ Unlearning — {dataset}")
@@ -284,47 +311,52 @@ def main():
                              download=True,
                              transform=get_test_transform(dataset))
 
-    # To calculate L_Df (gradient ascent), we use the training transforms to 
-    # prevent overfitting to specific augmentations and match the paper's optimization.
-    
-    val_fraction = cfg.get("grad_tau_val_fraction", 0.1)
-    
-    forget_indices, retain_train_indices, val_indices = build_indices(
+    forget_indices, retain_indices, _ = build_indices(
         full_train,
         strategy=cfg["forget_strategy"],
         forget_fraction=cfg["forget_fraction"],
         forget_class=cfg["forget_class"],
-        val_fraction=val_fraction,
+        val_fraction=0.0,          # no val split needed — we use test set as τ reference
         seed=cfg["seed"],
     )
 
     print(f"Forget set size : {len(forget_indices):,}")
-    print(f"Retain set size : {len(retain_train_indices):,} (train) + {len(val_indices):,} (val)")
+    print(f"Retain set size : {len(retain_indices):,}")
     print(f"Test   set size : {len(test_ds):,}\n")
 
     bs = cfg["batch_size"]
-    
-    # Loaders for the unlearning loop
-    forget_train_loader  = DataLoader(Subset(full_train, forget_indices),
-                                      batch_size=bs, shuffle=True,
-                                      num_workers=2, pin_memory=True)
-    retain_train_loader  = DataLoader(Subset(full_train, retain_train_indices),
-                                      batch_size=bs, shuffle=True,
-                                      num_workers=2, pin_memory=True, drop_last=True) # drop_last prevents small batch issues in zip
-    val_loader           = DataLoader(Subset(full_eval, val_indices),
-                                      batch_size=bs, shuffle=False,
-                                      num_workers=2, pin_memory=True)
 
-    # Loaders for evaluation (no augmentation)
-    forget_eval_loader   = DataLoader(Subset(full_eval, forget_indices),
-                                      batch_size=bs, shuffle=False,
-                                      num_workers=2, pin_memory=True)
-    # Recombine retain_train and val for a full retain evaluation
-    all_retain_eval_loader = DataLoader(Subset(full_eval, retain_train_indices + val_indices),
-                                      batch_size=bs, shuffle=False,
-                                      num_workers=2, pin_memory=True)
-    test_loader          = DataLoader(test_ds, batch_size=bs, shuffle=False,
-                                      num_workers=2, pin_memory=True)
+    # ── Unlearning loaders ─────────────────────────────────────────────────────
+    # forget_train_loader: EVAL transforms — must match τ scale.
+    #   (Using augmented images here inflates L_Df above τ, zeroing the ReLU.)
+    forget_train_loader = DataLoader(Subset(full_eval, forget_indices),
+                                     batch_size=bs, shuffle=True,
+                                     num_workers=2, pin_memory=True)
+    retain_train_loader = DataLoader(Subset(full_train, retain_indices),
+                                     batch_size=bs, shuffle=True,
+                                     num_workers=2, pin_memory=True, drop_last=True)
+
+    # ── Evaluation loaders ─────────────────────────────────────────────────────
+    forget_eval_loader     = DataLoader(Subset(full_eval, forget_indices),
+                                        batch_size=bs, shuffle=False,
+                                        num_workers=2, pin_memory=True)
+    all_retain_eval_loader = DataLoader(Subset(full_eval, retain_indices),
+                                        batch_size=bs, shuffle=False,
+                                        num_workers=2, pin_memory=True)
+    test_loader            = DataLoader(test_ds, batch_size=bs, shuffle=False,
+                                        num_workers=2, pin_memory=True)
+
+    # ── τ reference loader ─────────────────────────────────────────────────────
+    # τ = mean loss on data the original model never trained on.
+    # We use a fixed 1 000-sample subset of the test set so that:
+    #   • the full 10 000-sample test_loader is untouched for fair evaluation
+    #   • τ computation is fast (< 1 s per epoch)
+    # All other methods also evaluate on the full test_loader — no asymmetry.
+    import random as _random
+    _rng_ref = _random.Random(cfg["seed"])
+    _ref_indices = _rng_ref.sample(range(len(test_ds)), min(1000, len(test_ds)))
+    ref_loader = DataLoader(Subset(test_ds, _ref_indices), batch_size=bs,
+                            shuffle=False, num_workers=2, pin_memory=True)
 
     criterion = nn.CrossEntropyLoss()
 
@@ -354,23 +386,30 @@ def main():
     # ── ∇τ Unlearning ──────────────────────────────────────────────────────────
     unlearn_start = time.time()
 
-    alpha_init = cfg.get("grad_tau_alpha", 0.5)
-    forget_epochs = cfg.get("grad_tau_forget_epochs", 10)
-    lr = cfg.get("grad_tau_lr", 1e-4)
-    weight_decay = cfg.get("grad_tau_weight_decay", 1e-4)
+    forget_epochs       = cfg.get("grad_tau_forget_epochs", 10)
+    lr                  = cfg.get("grad_tau_lr", 1e-4)
+    weight_decay        = cfg.get("grad_tau_weight_decay", 1e-4)
     recompute_val_every = cfg.get("grad_tau_recompute_val_every", 1)
 
+    # Paper rule of thumb (§6.4): α₀ ≈ (5/3) × |D_f| / |D_train|
+    # Config value must be a positive float to override; None/null → auto-compute.
+    _auto_alpha      = (5.0 / 3.0) * (len(forget_indices) / len(full_train))
+    _cfg_alpha       = cfg.get("grad_tau_alpha")
+    alpha_init       = float(_cfg_alpha) if isinstance(_cfg_alpha, (int, float)) else _auto_alpha
+    print(f"α₀ = {alpha_init:.4f}  ({'config override' if isinstance(_cfg_alpha, (int, float)) else 'auto'}, "
+          f"forget_fraction={len(forget_indices)/len(full_train):.3f})")
+
     model = grad_tau_unlearn(
-        model, 
-        forget_loader=forget_train_loader, 
-        retain_loader=retain_train_loader, 
-        val_loader=val_loader,
-        alpha_init=alpha_init, 
+        model,
+        forget_loader=forget_train_loader,
+        retain_loader=retain_train_loader,
+        ref_loader=ref_loader,         # τ = 1 000-sample test subset, full test set untouched
+        alpha_init=alpha_init,
         forget_epochs=forget_epochs,
-        lr=lr, 
+        lr=lr,
         weight_decay=weight_decay,
-        recompute_val_every=recompute_val_every, 
-        device=device
+        recompute_val_every=recompute_val_every,
+        device=device,
     )
 
     unlearn_time = time.time() - unlearn_start
@@ -426,40 +465,40 @@ def main():
             "unlearning_method": "grad_tau",
             "forget_strategy":   cfg["forget_strategy"],
             "forget_size":       len(forget_indices),
-            "retain_size":       len(retain_train_indices) + len(val_indices),
+            "retain_size":       len(retain_indices),
             "config":            cfg,
             "unlearn_time_s":    unlearn_time
         }
     )
 
-    results = {
-        "dataset":            dataset,
-        "method":             "grad_tau",
-        "forget_strategy":    cfg["forget_strategy"],
-        "forget_size":        len(forget_indices),
-        "unlearn_time_s":     unlearn_time,
-        "alpha_init":         alpha_init,
-        "forget_epochs":      forget_epochs,
+    _write_results(results_path, {
+        "status":          "complete",
+        "dataset":         dataset,
+        "seed":            cfg["seed"],
+        "forget_fraction": cfg.get("forget_fraction"),
+        "method":          "grad_tau",
+        "forget_strategy": cfg["forget_strategy"],
+        "forget_size":     len(forget_indices),
+        "retain_size":     len(retain_indices),
+        "unlearn_time_s":  unlearn_time,
+        "alpha_init":      alpha_init,
+        "forget_epochs":   forget_epochs,
+        "tau_source":      "test_set",
         "before": {
-            "test_acc":    orig_test_acc,
-            "retain_acc":  orig_retain_acc,
-            "forget_acc":  orig_forget_acc,
-            "mia_l":       orig_mia["mia_l"],
-            "mia_e":       orig_mia["mia_e"],
+            "test_acc":   orig_test_acc,
+            "retain_acc": orig_retain_acc,
+            "forget_acc": orig_forget_acc,
+            "mia_l":      orig_mia["mia_l"],
+            "mia_e":      orig_mia["mia_e"],
         },
         "after": {
-            "test_acc":    new_test_acc,
-            "retain_acc":  new_retain_acc,
-            "forget_acc":  new_forget_acc,
-            "mia_l":       new_mia["mia_l"],
-            "mia_e":       new_mia["mia_e"],
+            "test_acc":   new_test_acc,
+            "retain_acc": new_retain_acc,
+            "forget_acc": new_forget_acc,
+            "mia_l":      new_mia["mia_l"],
+            "mia_e":      new_mia["mia_e"],
         },
-    }
-    
-    results_path = os.path.join(cfg["checkpoint_dir"], f"grad_tau_{ds_tag}_results.json")
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2, default=str)
-    
+    })
     print(f"\nResults saved → {results_path}")
 
 

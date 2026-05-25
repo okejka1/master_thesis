@@ -18,9 +18,6 @@ Usage
     python unlearn_sisa.py --config configs/cifar10.yaml \
                            --forget-strategy class --forget-class 3
 
-# On Google Colab:
-    !python unlearn_sisa.py --config configs/cifar10.yaml \
-                            --checkpoint-dir /content/drive/MyDrive/master_thesis/checkpoints
 
 CLI overrides (all optional):
     --checkpoint-dir PATH
@@ -278,6 +275,14 @@ def retrain_shard(shard_id: int,
         retain_in_slice = [i for i in raw_slices[r] if i not in forget_set]
         base_indices.extend(retain_in_slice)
 
+    # Single scheduler for the entire retrain — resumes from start_epoch
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=cfg["lr_milestones"],
+        gamma=cfg["lr_gamma"],
+        last_epoch=start_epoch - 1,  # -1 when start_epoch=0 (fresh), else resume
+    )
+
     total_retrain_epochs = 0
     t0 = time.time()
 
@@ -298,21 +303,13 @@ def retrain_shard(shard_id: int,
               f"({len(base_indices)} retain samples)  "
               f"→ {epochs_per_slice} epochs")
 
-        # Create scheduler for this segment
-        scheduler = optim.lr_scheduler.MultiStepLR(
-            optimizer,
-            milestones=cfg["lr_milestones"],
-            gamma=cfg["lr_gamma"],
-            last_epoch=start_epoch + total_retrain_epochs - 1
-            if (start_epoch + total_retrain_epochs) > 0 else -1,
-        )
-
         for epoch in range(1, epochs_per_slice + 1):
             total_retrain_epochs += 1
             tr_loss, tr_acc = train_one_epoch(model, slice_loader,
                                               criterion, optimizer, device)
             scheduler.step()
             print(f"      Epoch {start_epoch + total_retrain_epochs:>3}  "
+                  f"LR {scheduler.get_last_lr()[0]:.5f}  "
                   f"Loss {tr_loss:.4f}  Acc {tr_acc:.2f}%")
 
         # Save updated checkpoint for this slice
@@ -352,6 +349,14 @@ def retrain_shard(shard_id: int,
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _write_results(path: str, payload: dict) -> None:
+    """Atomically write results JSON (write to tmp then rename)."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+    os.replace(tmp, path)
+
+
 def main():
     args = parse_args()
     cfg  = merge(load_config(args.config), args)
@@ -367,6 +372,10 @@ def main():
     aggregation = cfg["sisa_aggregation"]
 
     sisa_dir = os.path.join(cfg["checkpoint_dir"], f"sisa_{ds_tag}")
+
+    # NOTE: unlearn_results.json is shared across fractions — skip logic lives in
+    # the caller (sweep_kaggle.ipynb), which checks the fraction-specific copy.
+    _results_path = os.path.join(sisa_dir, "unlearn_results.json")
 
     print(f"{'='*65}")
     print(f"  SISA Unlearning — {dataset}")
@@ -575,37 +584,38 @@ def main():
     print(f"  Total retrain epochs   : {total_retrain_epochs}")
 
     # Save unlearning results
-    results = {
-        "dataset":            dataset,
-        "forget_strategy":    cfg["forget_strategy"],
-        "forget_size":        len(forget_indices),
-        "retain_size":        len(retain_indices),
-        "num_shards":         num_shards,
-        "num_slices":         num_slices,
-        "aggregation":        aggregation,
-        "affected_shards":    affected_shards,
-        "unlearn_time_s":     unlearn_time,
-        "sisa_train_time_s":  sisa_train_time,
+    _write_results(_results_path, {
+        "status":            "complete",
+        "dataset":           dataset,
+        "seed":              cfg["seed"],
+        "forget_fraction":   cfg.get("forget_fraction"),
+        "method":            "sisa",
+        "forget_strategy":   cfg["forget_strategy"],
+        "forget_size":       len(forget_indices),
+        "retain_size":       len(retain_indices),
+        "num_shards":        num_shards,
+        "num_slices":        num_slices,
+        "aggregation":       aggregation,
+        "affected_shards":   affected_shards,
+        "unlearn_time_s":    unlearn_time,
+        "sisa_train_time_s": sisa_train_time,
         "before": {
-            "test_acc":    orig_test_acc,
-            "retain_acc":  orig_retain_acc,
-            "forget_acc":  orig_forget_acc,
-            "mia_l":       orig_mia["mia_l"],
-            "mia_e":       orig_mia["mia_e"],
+            "test_acc":   orig_test_acc,
+            "retain_acc": orig_retain_acc,
+            "forget_acc": orig_forget_acc,
+            "mia_l":      orig_mia["mia_l"],
+            "mia_e":      orig_mia["mia_e"],
         },
         "after": {
-            "test_acc":    new_test_acc,
-            "retain_acc":  new_retain_acc,
-            "forget_acc":  new_forget_acc,
-            "mia_l":       new_mia["mia_l"],
-            "mia_e":       new_mia["mia_e"],
+            "test_acc":   new_test_acc,
+            "retain_acc": new_retain_acc,
+            "forget_acc": new_forget_acc,
+            "mia_l":      new_mia["mia_l"],
+            "mia_e":      new_mia["mia_e"],
         },
-        "shard_stats":      all_stats,
-    }
-    results_path = os.path.join(sisa_dir, "unlearn_results.json")
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2, default=str)
-    print(f"\n  Results saved → {results_path}")
+        "shard_stats":     all_stats,
+    })
+    print(f"\n  Results saved → {_results_path}")
 
 
 if __name__ == "__main__":
