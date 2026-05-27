@@ -5,8 +5,9 @@ Contents:
     - STATS           : normalisation constants for CIFAR-10 / CIFAR-100
     - set_seed()      : reproducibility helper
     - get_datasets()  : loads CIFAR train/test datasets with standard transforms
-    - evaluate()      : loss + accuracy on a DataLoader
-    - per_class_accuracy() : per-class accuracy tensor
+    - evaluate()               : loss + accuracy on a DataLoader
+    - per_class_accuracy()     : per-class accuracy tensor
+    - forget_sample_confidences() : per-sample true-label softmax confidence
     - save_checkpoint / load_checkpoint : checkpoint I/O
 """
 
@@ -14,6 +15,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
@@ -155,6 +157,35 @@ def per_class_accuracy(model: nn.Module,
             class_total[c]   += mask.sum().item()
 
     return 100.0 * class_correct / class_total.clamp(min=1)
+
+
+def forget_sample_confidences(model: nn.Module,
+                               forget_loader: DataLoader,
+                               device: torch.device) -> list[float]:
+    """
+    For each sample in *forget_loader*, return the model's softmax confidence
+    on the **true label**, in loader order.
+
+    Returns a plain Python list of floats (JSON-serialisable).
+
+    Interpretation
+    --------------
+    - Before unlearning : values are near 1.0 (model is confident & correct).
+    - After ideal unlearning : values drop towards 1/num_classes (random-chance),
+      matching what the model would produce for unseen test samples — the same
+      signal the MIA loss threshold captures, but at per-sample resolution.
+    """
+    model.eval()
+    confidences: list[float] = []
+
+    with torch.no_grad():
+        for images, labels in forget_loader:
+            images, labels = images.to(device), labels.to(device)
+            probs     = F.softmax(model(images), dim=1)       # (B, C)
+            true_conf = probs[torch.arange(len(labels)), labels]
+            confidences.extend(true_conf.cpu().tolist())
+
+    return confidences
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────

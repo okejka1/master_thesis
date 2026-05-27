@@ -38,9 +38,11 @@ from torch.utils.data import DataLoader, Subset
 from models import build_resnet18
 from utils import (
     evaluate,
+    forget_sample_confidences,
     get_datasets,
     get_test_transform,
     load_checkpoint,
+    per_class_accuracy,
     save_checkpoint,
     set_seed,
 )
@@ -383,6 +385,13 @@ def main():
     orig_mia = run_mia_suite(model, forget_eval_loader, test_loader, device,
                              label="Original", seed=cfg["seed"])
 
+    num_classes = 10 if dataset == "CIFAR10" else 100
+    print("\nPer-class accuracy & forget-sample confidences (original model)...")
+    orig_per_class_test   = per_class_accuracy(model, test_loader,            num_classes, device).tolist()
+    orig_per_class_retain = per_class_accuracy(model, all_retain_eval_loader, num_classes, device).tolist()
+    orig_per_class_forget = per_class_accuracy(model, forget_eval_loader,     num_classes, device).tolist()
+    orig_forget_conf      = forget_sample_confidences(model, forget_eval_loader, device)
+
     # ── ∇τ Unlearning ──────────────────────────────────────────────────────────
     unlearn_start = time.time()
 
@@ -424,6 +433,12 @@ def main():
     print("\nMIA evaluation on unlearned model (5-fold CV):")
     new_mia = run_mia_suite(model, forget_eval_loader, test_loader, device,
                             label="Unlearned", seed=cfg["seed"])
+
+    print("\nPer-class accuracy & forget-sample confidences (unlearned model)...")
+    new_per_class_test   = per_class_accuracy(model, test_loader,            num_classes, device).tolist()
+    new_per_class_retain = per_class_accuracy(model, all_retain_eval_loader, num_classes, device).tolist()
+    new_per_class_forget = per_class_accuracy(model, forget_eval_loader,     num_classes, device).tolist()
+    new_forget_conf      = forget_sample_confidences(model, forget_eval_loader, device)
 
     # ── Side-by-side comparison ────────────────────────────────────────────────
     print(f"\n{'='*68}")
@@ -485,18 +500,26 @@ def main():
         "forget_epochs":   forget_epochs,
         "tau_source":      "test_set",
         "before": {
-            "test_acc":   orig_test_acc,
-            "retain_acc": orig_retain_acc,
-            "forget_acc": orig_forget_acc,
-            "mia_l":      orig_mia["mia_l"],
-            "mia_e":      orig_mia["mia_e"],
+            "test_acc":             orig_test_acc,
+            "retain_acc":           orig_retain_acc,
+            "forget_acc":           orig_forget_acc,
+            "mia_l":                orig_mia["mia_l"],
+            "mia_e":                orig_mia["mia_e"],
+            "per_class_acc_test":   orig_per_class_test,
+            "per_class_acc_retain": orig_per_class_retain,
+            "per_class_acc_forget": orig_per_class_forget,
+            "forget_conf":          orig_forget_conf,
         },
         "after": {
-            "test_acc":   new_test_acc,
-            "retain_acc": new_retain_acc,
-            "forget_acc": new_forget_acc,
-            "mia_l":      new_mia["mia_l"],
-            "mia_e":      new_mia["mia_e"],
+            "test_acc":             new_test_acc,
+            "retain_acc":           new_retain_acc,
+            "forget_acc":           new_forget_acc,
+            "mia_l":                new_mia["mia_l"],
+            "mia_e":                new_mia["mia_e"],
+            "per_class_acc_test":   new_per_class_test,
+            "per_class_acc_retain": new_per_class_retain,
+            "per_class_acc_forget": new_per_class_forget,
+            "forget_conf":          new_forget_conf,
         },
     })
     print(f"\nResults saved → {results_path}")

@@ -18,9 +18,15 @@ Usage
     python unlearn_sisa.py --config configs/cifar10.yaml \
                            --forget-strategy class --forget-class 3
 
+# Separate shard tree from results output (used by run_sweep.py):
+    python unlearn_sisa.py --config configs/cifar10.yaml \
+                           --checkpoint-dir checkpoints/seed_0/cifar10/sisa \
+                           --output-dir     checkpoints/seed_0/cifar10/sample_wise/sisa/frac_01pct
 
 CLI overrides (all optional):
-    --checkpoint-dir PATH
+    --checkpoint-dir PATH   where the SISA shard tree lives (sisa_<dataset>/ subdir)
+    --output-dir     PATH   where to write unlearn_results.json; defaults to the
+                            sisa_<dataset>/ dir inside --checkpoint-dir
     --data-root PATH
     --forget-strategy random|class
     --forget-fraction FLOAT
@@ -42,6 +48,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 import torchvision
@@ -75,6 +82,17 @@ def parse_args():
     parser.add_argument("--config", required=True,
                         help="Path to YAML config file.")
     parser.add_argument("--checkpoint-dir",    default=None)
+    parser.add_argument("--output-dir",        default=None,
+                        help="Directory to write unlearn_results.json into. "
+                             "Defaults to the sisa_<dataset>/ dir inside "
+                             "--checkpoint-dir. Use this to place results in "
+                             "a method/fraction-specific folder.")
+    parser.add_argument("--save-unlearned-ckpts", action="store_true", default=False,
+                        help="Save slice_RR_unlearned.pth checkpoints after "
+                             "retraining each affected slice. Off by default — "
+                             "all evaluation metrics are captured in the results "
+                             "JSON instead. The original slice_RR.pth files are "
+                             "never touched regardless of this flag.")
     parser.add_argument("--data-root",         default=None)
     parser.add_argument("--forget-strategy",   default=None,
                         choices=["random", "class"])
@@ -93,8 +111,10 @@ def parse_args():
 def merge(cfg: dict, args) -> dict:
     """Overlay non-None CLI args on top of YAML config values."""
     overrides = {
-        "checkpoint_dir":    args.checkpoint_dir,
-        "data_root":         args.data_root,
+        "checkpoint_dir":       args.checkpoint_dir,
+        "output_dir":           args.output_dir,
+        "save_unlearned_ckpts": args.save_unlearned_ckpts,
+        "data_root":            args.data_root,
         "forget_strategy":   args.forget_strategy,
         "forget_fraction":   args.forget_fraction,
         "forget_class":      args.forget_class,
@@ -312,25 +332,26 @@ def retrain_shard(shard_id: int,
                   f"LR {scheduler.get_last_lr()[0]:.5f}  "
                   f"Loss {tr_loss:.4f}  Acc {tr_acc:.2f}%")
 
-        # Save updated checkpoint for this slice
-        slice_ckpt = os.path.join(shard_dir,
-                                  f"slice_{r:02d}_unlearned.pth")
-        save_checkpoint(
-            model, slice_ckpt,
-            epoch=start_epoch + total_retrain_epochs,
-            test_acc=0.0,
-            dataset=dataset,
-            num_classes=num_classes,
-            extra={
-                "shard_id":            shard_id,
-                "slice_id":            r,
-                "unlearning_method":   "sisa",
-                "forget_size_shard":   len(forget_set.intersection(shard_indices)),
-                "retain_size_shard":   len(base_indices),
-                "optim_state":         optimizer.state_dict(),
-                "config":              cfg,
-            },
-        )
+        # Save updated checkpoint for this slice (optional — off by default).
+        # The original slice_RR.pth files are never modified.
+        if cfg.get("save_unlearned_ckpts", False):
+            slice_ckpt = os.path.join(shard_dir, f"slice_{r:02d}_unlearned.pth")
+            save_checkpoint(
+                model, slice_ckpt,
+                epoch=start_epoch + total_retrain_epochs,
+                test_acc=0.0,
+                dataset=dataset,
+                num_classes=num_classes,
+                extra={
+                    "shard_id":            shard_id,
+                    "slice_id":            r,
+                    "unlearning_method":   "sisa",
+                    "forget_size_shard":   len(forget_set.intersection(shard_indices)),
+                    "retain_size_shard":   len(base_indices),
+                    "optim_state":         optimizer.state_dict(),
+                    "config":              cfg,
+                },
+            )
 
     retrain_time = time.time() - t0
 
@@ -357,6 +378,72 @@ def _write_results(path: str, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+# ── Ensemble evaluation helpers ───────────────────────────────────────────────
+
+def ensemble_per_class_accuracy(models: list,
+                                loader,
+                                num_classes: int,
+                                device: torch.device,
+                                aggregation: str) -> list[float]:
+    """
+    Per-class accuracy (%) for a SISA ensemble over *loader*.
+    Uses soft-vote (average softmax) for both aggregation modes so that
+    the confidence values are consistent with the MIA evaluation.
+
+    Returns a plain Python list of floats (JSON-serialisable), one per class.
+    Classes with zero samples in the loader are reported as 0.0.
+    """
+    for m in models:
+        m.eval()
+
+    class_correct = torch.zeros(num_classes)
+    class_total   = torch.zeros(num_classes)
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device)
+            probs  = torch.stack(
+                [F.softmax(m(images), dim=1).cpu() for m in models]
+            ).mean(0)                          # (B, C)
+            preds = probs.argmax(1)            # (B,)
+
+            for c in range(num_classes):
+                mask = labels == c
+                class_correct[c] += preds[mask].eq(labels[mask]).sum().item()
+                class_total[c]   += mask.sum().item()
+
+    return (100.0 * class_correct / class_total.clamp(min=1)).tolist()
+
+
+def forget_sample_confidences(models: list,
+                              forget_loader,
+                              device: torch.device,
+                              aggregation: str) -> list[float]:
+    """
+    Ensemble softmax confidence on the **true label** for each forget sample,
+    in loader order.  Returns a plain Python list of floats.
+
+    A well-unlearned model should show confidences close to 1/num_classes
+    (random-chance level), similar to how a model that never saw those samples
+    would behave on unseen test data.
+    """
+    for m in models:
+        m.eval()
+
+    confidences: list[float] = []
+
+    with torch.no_grad():
+        for images, labels in forget_loader:
+            images, labels = images.to(device), labels.to(device)
+            probs = torch.stack(
+                [F.softmax(m(images), dim=1) for m in models]
+            ).mean(0)                                       # (B, C)
+            true_conf = probs[torch.arange(len(labels)), labels]
+            confidences.extend(true_conf.cpu().tolist())
+
+    return confidences
+
+
 def main():
     args = parse_args()
     cfg  = merge(load_config(args.config), args)
@@ -373,9 +460,12 @@ def main():
 
     sisa_dir = os.path.join(cfg["checkpoint_dir"], f"sisa_{ds_tag}")
 
-    # NOTE: unlearn_results.json is shared across fractions — skip logic lives in
-    # the caller (sweep_kaggle.ipynb), which checks the fraction-specific copy.
-    _results_path = os.path.join(sisa_dir, "unlearn_results.json")
+    # Results go to --output-dir when provided (run_sweep.py passes a
+    # method/fraction-specific path); otherwise fall back to sisa_dir so the
+    # script still works standalone without the flag.
+    _output_dir   = cfg.get("output_dir") or sisa_dir
+    os.makedirs(_output_dir, exist_ok=True)
+    _results_path = os.path.join(_output_dir, "unlearn_results.json")
 
     print(f"{'='*65}")
     print(f"  SISA Unlearning — {dataset}")
@@ -388,7 +478,8 @@ def main():
     print(f"  Shards (S)      : {num_shards}")
     print(f"  Slices (R)      : {num_slices}")
     print(f"  Aggregation     : {aggregation}")
-    print(f"  Checkpoints     : {sisa_dir}")
+    print(f"  Shard tree      : {sisa_dir}")
+    print(f"  Results out     : {_output_dir}")
     print(f"{'='*65}\n")
 
     # ── Data ──────────────────────────────────────────────────────────────────
@@ -481,6 +572,16 @@ def main():
         original_models, forget_loader, test_loader, device,
         aggregation=aggregation, label="Original", seed=cfg["seed"])
 
+    print("\nPer-class accuracy & forget-sample confidences (original ensemble)...")
+    orig_per_class_test   = ensemble_per_class_accuracy(
+        original_models, test_loader, num_classes, device, aggregation)
+    orig_per_class_retain = ensemble_per_class_accuracy(
+        original_models, retain_eval_loader, num_classes, device, aggregation)
+    orig_per_class_forget = ensemble_per_class_accuracy(
+        original_models, forget_loader, num_classes, device, aggregation)
+    orig_forget_conf      = forget_sample_confidences(
+        original_models, forget_loader, device, aggregation)
+
     # ── Identify affected shards ──────────────────────────────────────────────
     affected_shards = []
     for s, shard_idx in enumerate(shards):
@@ -541,6 +642,16 @@ def main():
         updated_models, forget_loader, test_loader, device,
         aggregation=aggregation, label="After SISA", seed=cfg["seed"])
 
+    print("\nPer-class accuracy & forget-sample confidences (updated ensemble)...")
+    new_per_class_test   = ensemble_per_class_accuracy(
+        updated_models, test_loader, num_classes, device, aggregation)
+    new_per_class_retain = ensemble_per_class_accuracy(
+        updated_models, retain_eval_loader, num_classes, device, aggregation)
+    new_per_class_forget = ensemble_per_class_accuracy(
+        updated_models, forget_loader, num_classes, device, aggregation)
+    new_forget_conf      = forget_sample_confidences(
+        updated_models, forget_loader, device, aggregation)
+
     # ── Side-by-side comparison ───────────────────────────────────────────────
     print(f"\n{'='*68}")
     print(f"{'Metric':<22} {'Before SISA':>12}  {'After SISA':>12}  {'\u0394':>6}")
@@ -600,18 +711,26 @@ def main():
         "unlearn_time_s":    unlearn_time,
         "sisa_train_time_s": sisa_train_time,
         "before": {
-            "test_acc":   orig_test_acc,
-            "retain_acc": orig_retain_acc,
-            "forget_acc": orig_forget_acc,
-            "mia_l":      orig_mia["mia_l"],
-            "mia_e":      orig_mia["mia_e"],
+            "test_acc":             orig_test_acc,
+            "retain_acc":           orig_retain_acc,
+            "forget_acc":           orig_forget_acc,
+            "mia_l":                orig_mia["mia_l"],
+            "mia_e":                orig_mia["mia_e"],
+            "per_class_acc_test":   orig_per_class_test,
+            "per_class_acc_retain": orig_per_class_retain,
+            "per_class_acc_forget": orig_per_class_forget,
+            "forget_conf":          orig_forget_conf,
         },
         "after": {
-            "test_acc":   new_test_acc,
-            "retain_acc": new_retain_acc,
-            "forget_acc": new_forget_acc,
-            "mia_l":      new_mia["mia_l"],
-            "mia_e":      new_mia["mia_e"],
+            "test_acc":             new_test_acc,
+            "retain_acc":           new_retain_acc,
+            "forget_acc":           new_forget_acc,
+            "mia_l":                new_mia["mia_l"],
+            "mia_e":                new_mia["mia_e"],
+            "per_class_acc_test":   new_per_class_test,
+            "per_class_acc_retain": new_per_class_retain,
+            "per_class_acc_forget": new_per_class_forget,
+            "forget_conf":          new_forget_conf,
         },
         "shard_stats":     all_stats,
     })

@@ -1,0 +1,526 @@
+[
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.0001,
+    "method": "naive_retrain",
+    "forget_strategy": "random",
+    "forget_size": 5,
+    "retain_size": 49995,
+    "unlearn_time_s": 4527.214219331741,
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.99799979998,
+      "forget_acc": 100.0,
+      "mia_l": 0.5,
+      "mia_e": 0.5
+    },
+    "after": {
+      "test_acc": 94.72,
+      "retain_acc": 99.99199919991999,
+      "forget_acc": 100.0,
+      "mia_l": 0.5,
+      "mia_e": 0.5
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.0001,
+    "method": "grad_tau",
+    "forget_strategy": "random",
+    "forget_size": 5,
+    "retain_size": 49995,
+    "unlearn_time_s": 17.97612237930298,
+    "alpha_init": 0.0001666666666666667,
+    "forget_epochs": 10,
+    "tau_source": "test_set",
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.99799979998,
+      "forget_acc": 100.0,
+      "mia_l": 0.5,
+      "mia_e": 0.5
+    },
+    "after": {
+      "test_acc": 92.48,
+      "retain_acc": 98.9078907890789,
+      "forget_acc": 100.0,
+      "mia_l": 0.5,
+      "mia_e": 0.5
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.0001,
+    "method": "sisa",
+    "forget_strategy": "random",
+    "forget_size": 5,
+    "retain_size": 49995,
+    "num_shards": 5,
+    "num_slices": 10,
+    "aggregation": "soft_vote",
+    "affected_shards": [
+      0,
+      3,
+      4
+    ],
+    "unlearn_time_s": 888.8128337860107,
+    "sisa_train_time_s": 2801.0134246349335,
+    "before": {
+      "test_acc": 79.98,
+      "retain_acc": 84.05440544054406,
+      "forget_acc": 100.0,
+      "mia_l": 0.5,
+      "mia_e": 0.7
+    },
+    "after": {
+      "test_acc": 80.14,
+      "retain_acc": 83.86038603860386,
+      "forget_acc": 60.0,
+      "mia_l": 0.6,
+      "mia_e": 0.7
+    },
+    "shard_stats": [
+      {
+        "retrained": true,
+        "shard_id": 0,
+        "affected_slice": 3,
+        "slices_retrained": 7,
+        "epochs_retrained": 70,
+        "forget_in_shard": 3,
+        "retrain_time_s": 475.45150113105774
+      },
+      {
+        "retrained": true,
+        "shard_id": 3,
+        "affected_slice": 9,
+        "slices_retrained": 1,
+        "epochs_retrained": 10,
+        "forget_in_shard": 1,
+        "retrain_time_s": 91.97925162315369
+      },
+      {
+        "retrained": true,
+        "shard_id": 4,
+        "affected_slice": 6,
+        "slices_retrained": 4,
+        "epochs_retrained": 40,
+        "forget_in_shard": 1,
+        "retrain_time_s": 319.14684557914734
+      }
+    ]
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.001,
+    "method": "naive_retrain",
+    "forget_strategy": "random",
+    "forget_size": 50,
+    "retain_size": 49950,
+    "unlearn_time_s": 4516.581945180893,
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.997997997998,
+      "forget_acc": 100.0,
+      "mia_l": 0.5800000000000001,
+      "mia_e": 0.55
+    },
+    "after": {
+      "test_acc": 94.59,
+      "retain_acc": 99.995995995996,
+      "forget_acc": 90.0,
+      "mia_l": 0.52,
+      "mia_e": 0.4800000000000001
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.001,
+    "method": "grad_tau",
+    "forget_strategy": "random",
+    "forget_size": 50,
+    "retain_size": 49950,
+    "unlearn_time_s": 19.39755606651306,
+    "alpha_init": 0.0016666666666666668,
+    "forget_epochs": 10,
+    "tau_source": "test_set",
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.997997997998,
+      "forget_acc": 100.0,
+      "mia_l": 0.5800000000000001,
+      "mia_e": 0.55
+    },
+    "after": {
+      "test_acc": 93.4,
+      "retain_acc": 99.57957957957957,
+      "forget_acc": 98.0,
+      "mia_l": 0.53,
+      "mia_e": 0.45
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.001,
+    "method": "sisa",
+    "forget_strategy": "random",
+    "forget_size": 50,
+    "retain_size": 49950,
+    "num_shards": 5,
+    "num_slices": 10,
+    "aggregation": "soft_vote",
+    "affected_shards": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "unlearn_time_s": 2534.8896379470825,
+    "sisa_train_time_s": 2801.0134246349335,
+    "before": {
+      "test_acc": 79.98,
+      "retain_acc": 84.05605605605605,
+      "forget_acc": 84.0,
+      "mia_l": 0.45999999999999996,
+      "mia_e": 0.53
+    },
+    "after": {
+      "test_acc": 76.77,
+      "retain_acc": 79.86386386386387,
+      "forget_acc": 78.0,
+      "mia_l": 0.53,
+      "mia_e": 0.4
+    },
+    "shard_stats": [
+      {
+        "retrained": true,
+        "shard_id": 0,
+        "affected_slice": 3,
+        "slices_retrained": 7,
+        "epochs_retrained": 70,
+        "forget_in_shard": 7,
+        "retrain_time_s": 473.5944449901581
+      },
+      {
+        "retrained": true,
+        "shard_id": 1,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 6,
+        "retrain_time_s": 561.0868666172028
+      },
+      {
+        "retrained": true,
+        "shard_id": 2,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 15,
+        "retrain_time_s": 556.1415123939514
+      },
+      {
+        "retrained": true,
+        "shard_id": 3,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 9,
+        "retrain_time_s": 553.801943063736
+      },
+      {
+        "retrained": true,
+        "shard_id": 4,
+        "affected_slice": 5,
+        "slices_retrained": 5,
+        "epochs_retrained": 50,
+        "forget_in_shard": 13,
+        "retrain_time_s": 387.5462443828583
+      }
+    ]
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.01,
+    "method": "naive_retrain",
+    "forget_strategy": "random",
+    "forget_size": 500,
+    "retain_size": 49500,
+    "unlearn_time_s": 4507.554004192352,
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.9979797979798,
+      "forget_acc": 100.0,
+      "mia_l": 0.5509999999999999,
+      "mia_e": 0.5519999999999999
+    },
+    "after": {
+      "test_acc": 94.7,
+      "retain_acc": 99.98585858585858,
+      "forget_acc": 94.6,
+      "mia_l": 0.49000000000000005,
+      "mia_e": 0.488
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.01,
+    "method": "grad_tau",
+    "forget_strategy": "random",
+    "forget_size": 500,
+    "retain_size": 49500,
+    "unlearn_time_s": 24.37195634841919,
+    "alpha_init": 0.016666666666666666,
+    "forget_epochs": 10,
+    "tau_source": "test_set",
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.9979797979798,
+      "forget_acc": 100.0,
+      "mia_l": 0.5509999999999999,
+      "mia_e": 0.5519999999999999
+    },
+    "after": {
+      "test_acc": 93.72,
+      "retain_acc": 99.6969696969697,
+      "forget_acc": 99.4,
+      "mia_l": 0.539,
+      "mia_e": 0.552
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.01,
+    "method": "sisa",
+    "forget_strategy": "random",
+    "forget_size": 500,
+    "retain_size": 49500,
+    "num_shards": 5,
+    "num_slices": 10,
+    "aggregation": "soft_vote",
+    "affected_shards": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "unlearn_time_s": 2757.862607717514,
+    "sisa_train_time_s": 2801.0134246349335,
+    "before": {
+      "test_acc": 79.98,
+      "retain_acc": 84.06464646464646,
+      "forget_acc": 83.2,
+      "mia_l": 0.5039999999999999,
+      "mia_e": 0.522
+    },
+    "after": {
+      "test_acc": 80.78,
+      "retain_acc": 85.8,
+      "forget_acc": 79.2,
+      "mia_l": 0.483,
+      "mia_e": 0.513
+    },
+    "shard_stats": [
+      {
+        "retrained": true,
+        "shard_id": 0,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 109,
+        "retrain_time_s": 558.3068232536316
+      },
+      {
+        "retrained": true,
+        "shard_id": 1,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 88,
+        "retrain_time_s": 556.6372058391571
+      },
+      {
+        "retrained": true,
+        "shard_id": 2,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 110,
+        "retrain_time_s": 546.5516579151154
+      },
+      {
+        "retrained": true,
+        "shard_id": 3,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 96,
+        "retrain_time_s": 547.1446387767792
+      },
+      {
+        "retrained": true,
+        "shard_id": 4,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 97,
+        "retrain_time_s": 547.6824524402618
+      }
+    ]
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.1,
+    "method": "naive_retrain",
+    "forget_strategy": "random",
+    "forget_size": 5000,
+    "retain_size": 45000,
+    "unlearn_time_s": 4152.7910323143005,
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.99777777777778,
+      "forget_acc": 100.0,
+      "mia_l": 0.5634,
+      "mia_e": 0.5623
+    },
+    "after": {
+      "test_acc": 94.34,
+      "retain_acc": 99.99111111111111,
+      "forget_acc": 94.16,
+      "mia_l": 0.5032,
+      "mia_e": 0.49639999999999995
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.1,
+    "method": "grad_tau",
+    "forget_strategy": "random",
+    "forget_size": 5000,
+    "retain_size": 45000,
+    "unlearn_time_s": 101.53203749656677,
+    "alpha_init": 0.16666666666666669,
+    "forget_epochs": 10,
+    "tau_source": "test_set",
+    "before": {
+      "test_acc": 94.8,
+      "retain_acc": 99.99777777777778,
+      "forget_acc": 100.0,
+      "mia_l": 0.5634,
+      "mia_e": 0.5623
+    },
+    "after": {
+      "test_acc": 92.93,
+      "retain_acc": 99.21333333333334,
+      "forget_acc": 98.7,
+      "mia_l": 0.5402000000000001,
+      "mia_e": 0.5356
+    }
+  },
+  {
+    "status": "complete",
+    "dataset": "CIFAR10",
+    "seed": 0,
+    "forget_fraction": 0.1,
+    "method": "sisa",
+    "forget_strategy": "random",
+    "forget_size": 5000,
+    "retain_size": 45000,
+    "num_shards": 5,
+    "num_slices": 10,
+    "aggregation": "soft_vote",
+    "affected_shards": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "unlearn_time_s": 2546.2178342342377,
+    "sisa_train_time_s": 2801.0134246349335,
+    "before": {
+      "test_acc": 79.98,
+      "retain_acc": 84.01333333333334,
+      "forget_acc": 84.44,
+      "mia_l": 0.5096999999999999,
+      "mia_e": 0.5081
+    },
+    "after": {
+      "test_acc": 77.54,
+      "retain_acc": 82.29333333333334,
+      "forget_acc": 78.1,
+      "mia_l": 0.49239999999999995,
+      "mia_e": 0.4995
+    },
+    "shard_stats": [
+      {
+        "retrained": true,
+        "shard_id": 0,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 974,
+        "retrain_time_s": 516.743248462677
+      },
+      {
+        "retrained": true,
+        "shard_id": 1,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 1021,
+        "retrain_time_s": 503.70639538764954
+      },
+      {
+        "retrained": true,
+        "shard_id": 2,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 1067,
+        "retrain_time_s": 505.1286883354187
+      },
+      {
+        "retrained": true,
+        "shard_id": 3,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 979,
+        "retrain_time_s": 512.3096280097961
+      },
+      {
+        "retrained": true,
+        "shard_id": 4,
+        "affected_slice": 0,
+        "slices_retrained": 10,
+        "epochs_retrained": 100,
+        "forget_in_shard": 959,
+        "retrain_time_s": 506.7964267730713
+      }
+    ]
+  }
+]

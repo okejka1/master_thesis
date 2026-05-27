@@ -39,8 +39,9 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from models import build_resnet18
-from utils import (STATS, evaluate, get_datasets, get_test_transform,
-                   load_checkpoint, save_checkpoint, set_seed)
+from utils import (STATS, evaluate, forget_sample_confidences, get_datasets,
+                   get_test_transform, load_checkpoint, per_class_accuracy,
+                   save_checkpoint, set_seed)
 from mia import run_mia_suite
 
 
@@ -273,6 +274,12 @@ def main():
     orig_mia = run_mia_suite(original_model, forget_loader, test_loader, device,
                              label="Original", seed=cfg["seed"])
 
+    print("\nPer-class accuracy & forget-sample confidences (original model)...")
+    orig_per_class_test   = per_class_accuracy(original_model, test_loader,        num_classes, device).tolist()
+    orig_per_class_retain = per_class_accuracy(original_model, retain_eval_loader, num_classes, device).tolist()
+    orig_per_class_forget = per_class_accuracy(original_model, forget_loader,      num_classes, device).tolist()
+    orig_forget_conf      = forget_sample_confidences(original_model, forget_loader, device)
+
     # ── Naive unlearning: retrain from scratch on retain set ───────────────────
     if _skip_training:
         # Training was already completed in a previous session; reload partial data.
@@ -283,6 +290,12 @@ def main():
         orig_forget_acc= _partial["before"]["forget_acc"]
         orig_mia       = {"mia_l": _partial["before"].get("mia_l"),
                           "mia_e": _partial["before"].get("mia_e")}
+        # Restore per-class metrics if phase-1 already recorded them;
+        # otherwise keep the freshly-computed values from above.
+        orig_per_class_test   = _partial["before"].get("per_class_acc_test",   orig_per_class_test)
+        orig_per_class_retain = _partial["before"].get("per_class_acc_retain", orig_per_class_retain)
+        orig_per_class_forget = _partial["before"].get("per_class_acc_forget", orig_per_class_forget)
+        orig_forget_conf      = _partial["before"].get("forget_conf",           orig_forget_conf)
     else:
         print(f"\nRetraining fresh model on retain set "
               f"({len(retain_indices):,} samples) for {cfg['num_epochs']} epochs...\n")
@@ -359,18 +372,26 @@ def main():
             "retain_size":     len(retain_indices),
             "unlearn_time_s":  unlearn_time,
             "before": {
-                "test_acc":   orig_test_acc,
-                "retain_acc": orig_retain_acc,
-                "forget_acc": orig_forget_acc,
-                "mia_l":      orig_mia["mia_l"],
-                "mia_e":      orig_mia["mia_e"],
+                "test_acc":             orig_test_acc,
+                "retain_acc":           orig_retain_acc,
+                "forget_acc":           orig_forget_acc,
+                "mia_l":                orig_mia["mia_l"],
+                "mia_e":                orig_mia["mia_e"],
+                "per_class_acc_test":   orig_per_class_test,
+                "per_class_acc_retain": orig_per_class_retain,
+                "per_class_acc_forget": orig_per_class_forget,
+                "forget_conf":          orig_forget_conf,
             },
             "after": {
-                "test_acc":   None,
-                "retain_acc": None,
-                "forget_acc": None,
-                "mia_l":      None,
-                "mia_e":      None,
+                "test_acc":             None,
+                "retain_acc":           None,
+                "forget_acc":           None,
+                "mia_l":                None,
+                "mia_e":                None,
+                "per_class_acc_test":   None,
+                "per_class_acc_retain": None,
+                "per_class_acc_forget": None,
+                "forget_conf":          None,
             },
         })
         print(f"  Phase-1 results written → {results_path}")
@@ -387,6 +408,12 @@ def main():
     print("\nMIA evaluation on naive-retrained model (5-fold CV):")
     new_mia = run_mia_suite(naive_model, forget_loader, test_loader, device,
                             label="Naive Retrain", seed=cfg["seed"])
+
+    print("\nPer-class accuracy & forget-sample confidences (naive-retrained model)...")
+    new_per_class_test   = per_class_accuracy(naive_model, test_loader,        num_classes, device).tolist()
+    new_per_class_retain = per_class_accuracy(naive_model, retain_eval_loader, num_classes, device).tolist()
+    new_per_class_forget = per_class_accuracy(naive_model, forget_loader,      num_classes, device).tolist()
+    new_forget_conf      = forget_sample_confidences(naive_model, forget_loader, device)
 
     # ── Side-by-side comparison ────────────────────────────────────────────────
     print(f"\n{'='*68}")
@@ -429,18 +456,26 @@ def main():
         "retain_size":     len(retain_indices),
         "unlearn_time_s":  unlearn_time,
         "before": {
-            "test_acc":   orig_test_acc,
-            "retain_acc": orig_retain_acc,
-            "forget_acc": orig_forget_acc,
-            "mia_l":      orig_mia["mia_l"],
-            "mia_e":      orig_mia["mia_e"],
+            "test_acc":             orig_test_acc,
+            "retain_acc":           orig_retain_acc,
+            "forget_acc":           orig_forget_acc,
+            "mia_l":                orig_mia["mia_l"],
+            "mia_e":                orig_mia["mia_e"],
+            "per_class_acc_test":   orig_per_class_test,
+            "per_class_acc_retain": orig_per_class_retain,
+            "per_class_acc_forget": orig_per_class_forget,
+            "forget_conf":          orig_forget_conf,
         },
         "after": {
-            "test_acc":   naive_test_acc,
-            "retain_acc": naive_retain_acc,
-            "forget_acc": naive_forget_acc,
-            "mia_l":      new_mia["mia_l"],
-            "mia_e":      new_mia["mia_e"],
+            "test_acc":             naive_test_acc,
+            "retain_acc":           naive_retain_acc,
+            "forget_acc":           naive_forget_acc,
+            "mia_l":                new_mia["mia_l"],
+            "mia_e":                new_mia["mia_e"],
+            "per_class_acc_test":   new_per_class_test,
+            "per_class_acc_retain": new_per_class_retain,
+            "per_class_acc_forget": new_per_class_forget,
+            "forget_conf":          new_forget_conf,
         },
     })
     print(f"\n  Results saved → {results_path}")
