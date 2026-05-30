@@ -5,15 +5,14 @@ Wczytuje dane z plików JSON (class-wise i sample-wise) oraz CSV w results/.
 Wykresy zapisywane jako PDF + PNG do results/plots/.
 
 Wygenerowane pliki:
-  fig_mia                          — MIA przed i po oduczeniu (2×2)
-  fig_utility_forget               — dokładność testowa/zapomnienia vs frakcja (2×3)
-  fig_speedup                      — przyspieszenie log-log vs frakcja
+  fig_mia_dumbbell_po50_{cifar10,cifar100}      — dumbbell: po vs ideał
+  fig_mia_dumbbell_poprzed_{cifar10,cifar100}   — dumbbell: przed → po
+  fig_speedup_{cifar10,cifar100}   — przyspieszenie log-log vs frakcja (osobno per dataset)
   fig_tradeoff                     — scatter: A(Df) vs A(Dt)
   fig_time                         — czasy bezwzględne (skala log)
   fig_classwise_{ds}               — słupki po oduczeniu: test/retain/forget, klasowe
   fig_ba_class_{ds}                — przed i po: forget + test acc, klasowe
   fig_ba_sample_{ds}               — przed i po: forget + test acc, próbkowe (per frakcja)
-  fig_forget_conf_kde_{ds}         — KDE pewności na zbiorze zapominanym
   fig_per_class_heatmap_{ds}       — heatmapa zmiany dokładności per klasa
 """
 
@@ -80,23 +79,57 @@ def _bar_offsets(bar_w: float = 0.12, within_gap: float = 0.02,
     return before_offsets, after_offsets, bar_w, total_w
 
 
-def _kde(values, xs):
-    """Gaussowska KDE bez scipy."""
-    vals = np.array(values, dtype=float)
-    n = len(vals)
-    if n == 0:
-        return np.zeros_like(xs)
-    bw = 1.06 * vals.std(ddof=1) * n ** (-0.2) if vals.std() > 0 else 0.01
-    return np.mean(
-        np.exp(-0.5 * ((xs[:, None] - vals[None, :]) / bw) ** 2), axis=1
-    ) / (bw * np.sqrt(2 * np.pi))
-
-
 def _save(fig, name: str) -> None:
     fig.savefig(OUT_DIR / f"{name}.pdf", dpi=300, bbox_inches="tight")
     fig.savefig(OUT_DIR / f"{name}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"✓ {name}.pdf / {name}.png")
+
+
+def _shade_mia_reliability(ax, runs) -> list:
+    """Cieniuje strefy niewiarygodnego/ograniczonego MIA i zwraca uchwyty legendy."""
+    fracs = sorted(set(r["forget_fraction"] for r in runs))
+    rel_map = {r["forget_fraction"]: r["mia_reliability"]
+               for r in runs if r["forget_fraction"] not in {}}
+    # deduplicate: first occurrence per frac
+    rel_map = {}
+    for r in runs:
+        f = r["forget_fraction"]
+        if f not in rel_map:
+            rel_map[f] = r["mia_reliability"]
+
+    # Granice stref: geometryczne środki między sąsiednimi frakcjami (skala log)
+    bounds = []
+    for i, f in enumerate(fracs):
+        l = (f * fracs[i - 1]) ** 0.5 if i > 0          else f * 0.4
+        r = (f * fracs[i + 1]) ** 0.5 if i < len(fracs) - 1 else f * 2.5
+        bounds.append((l * 100, r * 100, rel_map[f]))
+
+    # Scalanie sąsiednich przedziałów tej samej klasy
+    merged = []
+    for l, r, rel in bounds:
+        if merged and merged[-1][2] == rel:
+            merged[-1][1] = r
+        else:
+            merged.append([l, r, rel])
+
+    ZONE = {
+        "unreliable": ("#d62728", 0.10, f"MIA niewiarygodne ($|D_f|<{MIA_UNRELIABLE}$)"),
+        "limited":    ("#ff7f0e", 0.07, f"MIA ograniczone ($|D_f|<{MIA_LIMITED}$)"),
+    }
+    added = set()
+    legend_handles = []
+    for l, r, rel in merged:
+        if rel not in ZONE:
+            continue
+        color, alpha, label = ZONE[rel]
+        ax.axvspan(l, r, alpha=alpha, color=color, zorder=0, lw=0)
+        if rel not in added:
+            legend_handles.append(
+                mpatches.Patch(facecolor=color, alpha=alpha + 0.15, label=label)
+            )
+            added.add(rel)
+    return legend_handles
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +157,8 @@ def load_sample_runs(dataset_key: str) -> list:
             base = naive_time.get(r["forget_fraction"])
             speedup = base / t if base and t else None
         elif method == "sisa":
-            full = r.get("sisa_train_time_s")
-            speedup = full / t if full and t else None
+            base = naive_time.get(r["forget_fraction"])
+            speedup = base / t if base and t else None
         else:
             speedup = None
 
@@ -178,8 +211,8 @@ def load_class_runs(dataset_key: str) -> list:
             base = naive_time.get(fc)
             speedup = base / t if base and t else None
         elif method == "sisa":
-            full = r.get("sisa_train_time_s")
-            speedup = full / t if full and t else None
+            base = naive_time.get(fc)
+            speedup = base / t if base and t else None
         else:
             speedup = None
 
@@ -219,166 +252,144 @@ def load_class_runs(dataset_key: str) -> list:
 # Wykresy próbkowe (sample-wise)
 # ---------------------------------------------------------------------------
 
-def plot_mia(sample_runs_c10, sample_runs_c100):
-    """MIA-Loss i MIA-Entropy przed i po oduczeniu — siatka 2×2."""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey="row")
+def _mia_fig_legend(fig, handles, ncol=4):
+    """Umieszcza wspólną legendę pod panelami wykresu MIA."""
+    fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.0),
+               ncol=ncol, fontsize=9, frameon=True,
+               borderaxespad=0.5, columnspacing=1.2)
+    plt.subplots_adjust(bottom=0.20)
+
+
+def plot_mia_dumbbell(sample_runs_c10, sample_runs_c100, mode="po_przed"):
+    """Dumbbell MIA — pionowe segmenty z kropkami, osobna figura per dataset.
+
+    mode='po_50'    → segment: ideał (50) → MIA_after
+    mode='po_przed' → segment: MIA_before → MIA_after
+    """
+    if mode == "po_50":
+        suptitle = "MIA po oduczeniu vs ideał (50%)"
+        fig_base = "fig_mia_dumbbell_po50"
+    else:
+        suptitle = "MIA przed i po oduczeniu"
+        fig_base = "fig_mia_dumbbell_poprzed"
 
     mia_configs = [
         ("b_mia_l", "a_mia_l", "MIA-Loss"),
         ("b_mia_e", "a_mia_e", "MIA-Entropy"),
     ]
-    datasets = [("CIFAR-10", sample_runs_c10), ("CIFAR-100", sample_runs_c100)]
+    datasets = [
+        ("CIFAR-10",  sample_runs_c10,  f"{fig_base}_cifar10"),
+        ("CIFAR-100", sample_runs_c100, f"{fig_base}_cifar100"),
+    ]
 
-    for row_idx, (dataset_name, runs) in enumerate(datasets):
+    jitter = dict(zip(METHODS, [0.80, 1.0, 1.25]))
+
+    for dataset_name, runs, fig_name in datasets:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+        rel_h = []
+
         for col_idx, (bkey, akey, mia_name) in enumerate(mia_configs):
-            ax = axes[row_idx][col_idx]
+            ax = axes[col_idx]
 
             for method in METHODS:
-                rows = [r for r in runs if r["method"] == method]
+                rows  = [r for r in runs if r["method"] == method]
                 fracs = sorted(set(r["forget_fraction"] for r in rows))
-                fracs_pct = [f * 100 for f in fracs]
-                before = [next((r[bkey] for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                after  = [next((r[akey] for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                color  = COLORS[method]
-                ax.plot(fracs_pct, before, linestyle="--", color=color, linewidth=1.5,
-                        alpha=0.55, marker="o", markersize=5, markerfacecolor="none")
-                ax.plot(fracs_pct, after,  linestyle="-",  color=color, linewidth=2,
-                        marker="o", markersize=6, label=METHOD_LABELS[method])
+                color = COLORS[method]
+                j     = jitter[method]
 
-            ax.axhline(50, color="black", linestyle=":", linewidth=1.8)
+                for f in fracs:
+                    row = next((r for r in rows if r["forget_fraction"] == f), None)
+                    if row is None:
+                        continue
+                    b_val = row[bkey]
+                    a_val = row[akey]
+                    x = f * 100 * j
+
+                    if mode == "po_50":
+                        lo, hi = (a_val, 50) if a_val < 50 else (50, a_val)
+                        ax.plot([x, x], [lo, hi], color=color, lw=1.8, alpha=0.7, zorder=3)
+                        ax.scatter([x], [a_val], color=color, s=55, zorder=5)
+                        ax.scatter([x], [50],    color=color, s=35, marker="D",
+                                   facecolors="none", linewidths=1.5, zorder=4)
+                    else:
+                        ax.plot([x, x], [b_val, a_val], color=color, lw=1.8, alpha=0.7, zorder=3)
+                        ax.scatter([x], [a_val], color=color, s=55, zorder=5)
+                        ax.scatter([x], [b_val], color=color, s=35, marker="o",
+                                   facecolors="none", linewidths=1.5, zorder=4)
+
+            h = _shade_mia_reliability(ax, runs)
+            if not rel_h:
+                rel_h = h
+            ax.axhline(50, color="black", ls=":", lw=1.8)
             ax.set_xscale("log")
             ax.set_xlabel("Rozmiar $D_f$ [% zbioru treningowego, skala log]", fontsize=10)
             ax.set_ylabel("Dokładność ataku MIA [%]", fontsize=10)
-            ax.set_title(f"{dataset_name} — {mia_name}", fontsize=11, fontweight="bold")
+            ax.set_title(mia_name, fontsize=11, fontweight="bold")
             ax.set_ylim([30, 80])
             ax.grid(True, alpha=0.3)
 
-            if row_idx == 0 and col_idx == 0:
-                method_h = [plt.Line2D([0], [0], color=COLORS[m], lw=2, label=METHOD_LABELS[m])
-                            for m in METHODS]
-                style_h = [
-                    plt.Line2D([0], [0], color="gray", lw=1.5, ls="--",
-                               marker="o", ms=5, mfc="none", label="Przed oduczeniem"),
-                    plt.Line2D([0], [0], color="gray", lw=2, ls="-",
-                               marker="o", ms=6, label="Po oduczeniu"),
-                    plt.Line2D([0], [0], color="black", lw=1.8, ls=":", label="Ideał (50%)"),
-                ]
-                ax.legend(handles=method_h + style_h, fontsize=9, loc="best")
+        method_h = [mpatches.Patch(color=COLORS[m], label=METHOD_LABELS[m])
+                    for m in METHODS]
+        if mode == "po_50":
+            style_h = [
+                plt.Line2D([0], [0], color="gray", lw=0, marker="o", ms=7,
+                           label="Po oduczeniu"),
+                plt.Line2D([0], [0], color="gray", lw=0, marker="D", ms=7,
+                           mfc="none", mew=1.5, label="Ideał (50%)"),
+            ]
+        else:
+            style_h = [
+                plt.Line2D([0], [0], color="gray", lw=0, marker="o", ms=7,
+                           label="Po oduczeniu"),
+                plt.Line2D([0], [0], color="gray", lw=0, marker="o", ms=7,
+                           mfc="none", mew=1.5, label="Przed oduczeniem"),
+            ]
+        ref_h = [plt.Line2D([0], [0], color="black", lw=1.8, ls=":", label="Ideał (50%)")]
+        _mia_fig_legend(fig, method_h + style_h + ref_h + rel_h)
+        fig.suptitle(f"{suptitle} — {dataset_name}", fontsize=13, fontweight="bold")
+        plt.tight_layout(rect=[0, 0.18, 1, 1])
+        _save(fig, fig_name)
 
-    fig.suptitle("Dokładność ataku MIA przed i po oduczeniu",
-                 fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    _save(fig, "fig_mia")
 
-
-def plot_utility_forget(sample_runs_c10, sample_runs_c100):
-    """Dokładność testowa, zapomnienia i ich różnica vs frakcja — siatka 2×3."""
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-
-    col_configs = [
-        ("b_test_acc",   "a_test_acc",   "Dokładność testowa $A(D_t)$ [%]",       (60, 100), False),
-        ("b_forget_acc", "a_forget_acc", "Dokładność na $D_f$: $A(D_f)$ [%]",     (0, 105),  False),
-        (None,           None,           "$A(D_t) - A(D_f)$ [pp]",                None,      True),
-    ]
-    datasets = [("CIFAR-10", sample_runs_c10), ("CIFAR-100", sample_runs_c100)]
-
-    for row_idx, (dataset_name, runs) in enumerate(datasets):
-        for col_idx, (bkey, akey, ylabel, ylim, is_diff) in enumerate(col_configs):
-            ax = axes[row_idx][col_idx]
-
-            for method in METHODS:
-                rows = [r for r in runs if r["method"] == method]
-                fracs = sorted(set(r["forget_fraction"] for r in rows))
-                fracs_pct = [f * 100 for f in fracs]
-                color = COLORS[method]
-
-                if is_diff:
-                    at = [next((r["a_test_acc"]   for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                    af = [next((r["a_forget_acc"] for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                    bt = [next((r["b_test_acc"]   for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                    bf = [next((r["b_forget_acc"] for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                    da = [t - g if t and g else None for t, g in zip(at, af)]
-                    db = [t - g if t and g else None for t, g in zip(bt, bf)]
-                    ax.plot(fracs_pct, db, ls="--", color=color, lw=1.5, alpha=0.55,
-                            marker="o", ms=5, mfc="none")
-                    ax.plot(fracs_pct, da, ls="-",  color=color, lw=2,
-                            marker="o", ms=6, label=METHOD_LABELS[method])
-                    ax.axhline(0, color="black", ls=":", lw=1.5, alpha=0.6)
-                else:
-                    before = [next((r[bkey] for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                    after  = [next((r[akey] for r in rows if r["forget_fraction"] == f), None) for f in fracs]
-                    ax.plot(fracs_pct, before, ls="--", color=color, lw=1.5, alpha=0.55,
-                            marker="o", ms=5, mfc="none")
-                    ax.plot(fracs_pct, after,  ls="-",  color=color, lw=2,
-                            marker="o", ms=6, label=METHOD_LABELS[method])
-
-            ax.set_xscale("log")
-            ax.set_xlabel("Rozmiar $D_f$ [% zbioru treningowego, skala log]", fontsize=9)
-            ax.set_ylabel(ylabel, fontsize=9)
-            title_str = ylabel.replace("[%]", "").replace("[pp]", "").strip()
-            ax.set_title(f"{dataset_name} — {title_str}", fontsize=10, fontweight="bold")
-            if ylim:
-                ax.set_ylim(ylim)
-            ax.grid(True, alpha=0.3)
-
-            if row_idx == 0 and col_idx == 0:
-                method_h = [plt.Line2D([0], [0], color=COLORS[m], lw=2, label=METHOD_LABELS[m])
-                            for m in METHODS]
-                style_h = [
-                    plt.Line2D([0], [0], color="gray", lw=1.5, ls="--",
-                               marker="o", ms=5, mfc="none", label="Przed oduczeniem"),
-                    plt.Line2D([0], [0], color="gray", lw=2, ls="-",
-                               marker="o", ms=6, label="Po oduczeniu"),
-                ]
-                ax.legend(handles=method_h + style_h, fontsize=9, loc="best")
-
-    axes[0][1].text(0.03, 0.04, "niżej = lepiej", transform=axes[0][1].transAxes,
-                    fontsize=8, color="gray", style="italic")
-    axes[1][1].text(0.03, 0.04, "niżej = lepiej", transform=axes[1][1].transAxes,
-                    fontsize=8, color="gray", style="italic")
-    axes[0][2].text(0.03, 0.04, "≈ 0 → $D_f$ ≈ $D_t$", transform=axes[0][2].transAxes,
-                    fontsize=8, color="gray", style="italic")
-    axes[1][2].text(0.03, 0.04, "≈ 0 → $D_f$ ≈ $D_t$", transform=axes[1][2].transAxes,
-                    fontsize=8, color="gray", style="italic")
-
-    fig.suptitle("Użyteczność modelu i efektywność zapomnienia vs rozmiar $D_f$",
-                 fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    _save(fig, "fig_utility_forget")
+SPEEDUP_LABELS = {
+    "grad_tau": "Grad-Tau",
+    "sisa":     "SISA",
+}
 
 
 def plot_speedup(sample_runs_c10, sample_runs_c100):
-    """Przyspieszenie (log-log) vs frakcja zapomnienia."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    """Przyspieszenie (log-log) vs frakcja zapomnienia — osobno per dataset."""
+    for dataset_name, runs, suffix in [
+        ("CIFAR-10",  sample_runs_c10,  "cifar10"),
+        ("CIFAR-100", sample_runs_c100, "cifar100"),
+    ]:
+        fig, ax = plt.subplots(figsize=(10, 7))
 
-    for dataset_name, ax, runs in [("CIFAR-10", ax1, sample_runs_c10),
-                                    ("CIFAR-100", ax2, sample_runs_c100)]:
         ax.axhline(1.0, color="gray", ls="--", lw=2,
-                   label="Naiwne retrenowanie (1×)")
+                   label="Naiwne retrenowanie 1×")
 
         for method in ["grad_tau", "sisa"]:
             rows = [r for r in runs if r["method"] == method]
             fracs = sorted(set(r["forget_fraction"] for r in rows))
             speedups = [next((r["speedup"] for r in rows if r["forget_fraction"] == f), None)
                         for f in fracs]
-            ax.plot(fracs, speedups, "o-", label=METHOD_LABELS[method],
-                    color=COLORS[method], lw=2, ms=7)
+            ax.plot(fracs, speedups, "o-", label=SPEEDUP_LABELS[method],
+                    color=COLORS[method], lw=2, ms=8)
             for f, s in zip(fracs, speedups):
                 if s is not None:
-                    ax.text(f, s * 1.08, f"{s:.1f}×", ha="center", fontsize=9)
+                    ax.text(f, s * 1.10, f"{s:.1f}×", ha="center", fontsize=10)
 
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("Rozmiar $D_f$ [% zbioru treningowego, skala log]", fontsize=11)
-        ax.set_ylabel("Przyspieszenie (skala log)", fontsize=11)
-        ax.set_title(dataset_name, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Rozmiar $D_f$ [% zbioru treningowego, skala log]", fontsize=12)
+        ax.set_ylabel("Przyspieszenie (skala log)", fontsize=12)
+        ax.set_title(f"Przyspieszenie oduczania — {dataset_name}",
+                     fontsize=14, fontweight="bold")
         ax.grid(True, alpha=0.3, which="both")
-        ax.legend(fontsize=10, loc="best")
+        ax.legend(fontsize=11, loc="best")
 
-    fig.suptitle("Przyspieszenie oduczania względem rozmiaru $D_f$",
-                 fontsize=13, fontweight="bold", y=1.00)
-    plt.tight_layout()
-    _save(fig, "fig_speedup")
+        plt.tight_layout()
+        _save(fig, f"fig_speedup_{suffix}")
 
 
 def plot_tradeoff(sample_runs_c10, sample_runs_c100):
@@ -499,7 +510,7 @@ def plot_classwise(class_runs, dataset_name, filename_base):
         ax.legend(fontsize=10, loc="best")
         ax.grid(True, alpha=0.3, axis="y")
 
-    fig.suptitle(f"Oduczanie klasowe — {dataset_name} (ziarno 0)",
+    fig.suptitle(f"Oduczanie klasowe — {dataset_name} ",
                  fontsize=13, fontweight="bold", y=1.00)
     plt.tight_layout()
     _save(fig, filename_base)
@@ -542,20 +553,20 @@ def _plot_before_after(ax, groups, group_labels, runs_or_class_runs,
     ax.set_ylim(0, 105)
     ax.grid(True, alpha=0.3, axis="y")
 
-    # Legenda: metody (kolory) + styl (kreskowany = przed, pełny = po)
+    
     method_handles = [mpatches.Patch(color=COLORS[m], label=METHOD_LABELS[m])
                       for m in METHODS]
     style_handles = [
         mpatches.Patch(facecolor="gray", alpha=0.40, hatch="///",
-                       edgecolor="gray", label="Przed oduczeniem"),
+                       edgecolor="gray", label="Przed oduczeniem (kreskowanie)"),
         mpatches.Patch(facecolor="gray", alpha=0.90,
-                       edgecolor="none", label="Po oduczeniu"),
+                       edgecolor="none", label="Po oduczeniu (pełny)"),
     ]
     if ideal_line is not None:
         style_handles.append(
             plt.Line2D([0], [0], color="red", ls="--", lw=1.5, label="Ideał (0%)")
         )
-    ax.legend(handles=method_handles + style_handles, fontsize=9, loc="best")
+    return method_handles + style_handles
 
 
 def plot_ba_class(class_runs, dataset_name, filename_base):
@@ -563,23 +574,25 @@ def plot_ba_class(class_runs, dataset_name, filename_base):
     classes = sorted(set(r["forget_class"] for r in class_runs))
     group_labels = [f"Klasa {c}" for c in classes]
 
-    fig, (ax_f, ax_t) = plt.subplots(1, 2, figsize=(14, 5))
+    fig, (ax_f, ax_t) = plt.subplots(1, 2, figsize=(14, 6))
 
-    _plot_before_after(ax_f, classes, group_labels, class_runs,
-                       "b_forget_acc", "a_forget_acc",
-                       "Dokładność na $D_f$: $A(D_f)$ [%]",
-                       ideal_line=0.0, lookup_key="forget_class",
-                       title="Dokładność na $D_f$ — przed i po")
+    handles = _plot_before_after(ax_f, classes, group_labels, class_runs,
+                                 "b_forget_acc", "a_forget_acc",
+                                 "Dokładność na $D_f$ [%]",
+                                 ideal_line=0.0, lookup_key="forget_class",
+                                 title="Dokładność na $D_f$ — przed i po")
 
     _plot_before_after(ax_t, classes, group_labels, class_runs,
                        "b_test_acc", "a_test_acc",
-                       "Dokładność testowa $A(D_t)$ [%]",
+                       "Dokładność na $D_t$ [%]",
                        ideal_line=None, lookup_key="forget_class",
-                       title="Dokładność testowa — przed i po")
+                       title="Dokładność na $D_t$ — przed i po")
 
-    fig.suptitle(f"Oduczanie klasowe: przed i po oduczeniu — {dataset_name} (ziarno 0)",
+    fig.suptitle(f"Oduczanie klasowe: przed i po oduczeniu — {dataset_name}",
                  fontsize=13, fontweight="bold")
-    plt.tight_layout()
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
+               fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
     _save(fig, filename_base)
 
 
@@ -588,26 +601,28 @@ def plot_ba_sample(sample_runs, dataset_name, filename_base):
     fracs = sorted(set(r["forget_fraction"] for r in sample_runs))
     group_labels = [f"{f*100:.2g}%" for f in fracs]
 
-    fig, (ax_f, ax_t) = plt.subplots(1, 2, figsize=(14, 5))
+    fig, (ax_f, ax_t) = plt.subplots(1, 2, figsize=(14, 6))
 
-    _plot_before_after(ax_f, fracs, group_labels, sample_runs,
-                       "b_forget_acc", "a_forget_acc",
-                       "Dokładność na $D_f$: $A(D_f)$ [%]",
-                       ideal_line=None, lookup_key="forget_fraction",
-                       title="Dokładność na $D_f$ — przed i po")
+    handles = _plot_before_after(ax_f, fracs, group_labels, sample_runs,
+                                 "b_forget_acc", "a_forget_acc",
+                                 "Dokładność na $D_f$ [%]",
+                                 ideal_line=None, lookup_key="forget_fraction",
+                                 title="Dokładność na $D_f$ — przed i po")
 
     _plot_before_after(ax_t, fracs, group_labels, sample_runs,
                        "b_test_acc", "a_test_acc",
-                       "Dokładność testowa $A(D_t)$ [%]",
+                       "Dokładność na $D_t$[%]",
                        ideal_line=None, lookup_key="forget_fraction",
-                       title="Dokładność testowa — przed i po")
+                       title="Dokładność na $D_t$— przed i po")
 
     ax_f.set_xlabel("Frakcja zapomnienia $|D_f|$ / $|D_{train}|$", fontsize=11)
     ax_t.set_xlabel("Frakcja zapomnienia $|D_f|$ / $|D_{train}|$", fontsize=11)
 
-    fig.suptitle(f"Oduczanie próbkowe: przed i po oduczeniu — {dataset_name} (ziarno 0)",
+    fig.suptitle(f"Oduczanie próbkowe: przed i po oduczeniu — {dataset_name}",
                  fontsize=13, fontweight="bold")
-    plt.tight_layout()
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
+               fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
     _save(fig, filename_base)
 
 
@@ -615,58 +630,13 @@ def plot_ba_sample(sample_runs, dataset_name, filename_base):
 # Wykresy z danych bogatych (JSON class-wise)
 # ---------------------------------------------------------------------------
 
-def plot_forget_conf_kde(class_runs, dataset_name, filename_base):
-    """KDE rozkładu pewności modelu na zbiorze zapominanym — przed i po."""
-    classes = sorted(set(r["forget_class"] for r in class_runs))
-    n_cls = len(classes)
-    xs = np.linspace(0.0, 1.0, 400)
+def plot_per_class_heatmap(class_runs, dataset_name, filename_base,
+                           max_rows: int = 20):
+    """Heatmapa zmiany $A(D_t)$ per klasa: po − przed oduczeniem.
 
-    fig, axes = plt.subplots(3, n_cls, figsize=(5 * n_cls, 4 * 3), sharey=False)
-    if n_cls == 1:
-        axes = [[axes[row]] for row in range(3)]
-
-    for row, method in enumerate(METHODS):
-        for col, fc in enumerate(classes):
-            ax = axes[row][col]
-            run = next((r for r in class_runs
-                        if r["method"] == method and r["forget_class"] == fc), None)
-            if run is None:
-                ax.set_visible(False)
-                continue
-
-            b_conf, a_conf = run["b_forget_conf"], run["a_forget_conf"]
-
-            if b_conf:
-                dens_b = _kde(b_conf, xs)
-                ax.plot(xs, dens_b, color="steelblue", lw=2, ls="--",
-                        label="Przed oduczeniem")
-                ax.fill_between(xs, dens_b, alpha=0.15, color="steelblue")
-            if a_conf:
-                dens_a = _kde(a_conf, xs)
-                ax.plot(xs, dens_a, color=COLORS[method], lw=2, ls="-",
-                        label="Po oduczeniu")
-                ax.fill_between(xs, dens_a, alpha=0.20, color=COLORS[method])
-
-            ax.axvline(0.5, color="gray", ls=":", lw=1.2, alpha=0.7)
-            ax.set_xlabel("Pewność modelu (zapomniana klasa)", fontsize=9)
-            ax.set_ylabel("Gęstość", fontsize=9)
-            ax.set_xlim(0, 1)
-            ax.set_title(f"{METHOD_LABELS[method]} — Klasa {fc}",
-                         fontsize=10, fontweight="bold")
-            ax.legend(fontsize=9)
-            ax.grid(True, alpha=0.25)
-
-    fig.suptitle(
-        f"Rozkład pewności modelu na zbiorze $D_f$ — {dataset_name} (ziarno 0)\n"
-        f"(kolaps w lewo = głębokie zapomnienie)",
-        fontsize=12, fontweight="bold",
-    )
-    plt.tight_layout()
-    _save(fig, filename_base)
-
-
-def plot_per_class_heatmap(class_runs, dataset_name, filename_base):
-    """Heatmapa zmiany $A(D_t)$ per klasa: po − przed oduczeniem."""
+    Dla dużych datasetów (>max_rows klas) pokazuje tylko zapomniane klasy
+    + top-(max_rows - n_forgotten) wierszy wg maksymalnej zmiany.
+    """
     classes_forgotten = sorted(set(r["forget_class"] for r in class_runs))
     sample_run = next((r for r in class_runs if r["b_per_class_acc_test"]), None)
     if sample_run is None:
@@ -676,51 +646,74 @@ def plot_per_class_heatmap(class_runs, dataset_name, filename_base):
     n_model_cls = len(sample_run["b_per_class_acc_test"])
     n_forgotten  = len(classes_forgotten)
 
-    fig, axes = plt.subplots(
-        1, 3, figsize=(6 * 3, max(6, n_model_cls * 0.35 + 2))
-    )
-    vmax = 15.0
-
-    for ax_idx, method in enumerate(METHODS):
-        ax = axes[ax_idx]
+    # Zbuduj pełne macierze dla każdej metody
+    all_mats = {}
+    for method in METHODS:
         mat = np.full((n_model_cls, n_forgotten), np.nan)
-
         for col, fc in enumerate(classes_forgotten):
             run = next((r for r in class_runs
                         if r["method"] == method and r["forget_class"] == fc), None)
             if run and run["b_per_class_acc_test"] and run["a_per_class_acc_test"]:
                 mat[:, col] = (np.array(run["a_per_class_acc_test"])
                                - np.array(run["b_per_class_acc_test"]))
+        all_mats[method] = mat
+
+    # Wybór wierszy do wyświetlenia
+    if n_model_cls > max_rows:
+        # Maksymalna zmiana w wierszu (po wszystkich metodach i zapomnianych klasach)
+        stacked = np.nanmax(np.abs(np.stack(list(all_mats.values()))), axis=0)
+        max_per_row = np.nanmax(stacked, axis=1)
+        forced = set(classes_forgotten)
+        remaining = [i for i in range(n_model_cls) if i not in forced]
+        n_extra = max(0, max_rows - len(forced))
+        top_extra = sorted(remaining, key=lambda i: max_per_row[i], reverse=True)[:n_extra]
+        rows_shown = sorted(forced | set(top_extra))
+        filter_note = (f"pokazano {len(rows_shown)}/{n_model_cls} klas "
+                       f"(zapomniane + {n_extra} najsilniej dotkniętych)")
+    else:
+        rows_shown = list(range(n_model_cls))
+        filter_note = None
+
+    n_shown = len(rows_shown)
+    fig, axes = plt.subplots(
+        1, 3, figsize=(6 * 3, max(6, n_shown * 0.40 + 2))
+    )
+    vmax = 15.0
+
+    for ax_idx, method in enumerate(METHODS):
+        ax = axes[ax_idx]
+        mat = all_mats[method][rows_shown, :]
 
         im = ax.imshow(mat, aspect="auto", cmap="RdBu",
                        vmin=-vmax, vmax=vmax, interpolation="nearest")
         ax.set_xticks(range(n_forgotten))
         ax.set_xticklabels([f"Zapom. {fc}" for fc in classes_forgotten], fontsize=9)
-        ax.set_yticks(range(n_model_cls))
-        ax.set_yticklabels([f"K{i}" for i in range(n_model_cls)], fontsize=7)
+        ax.set_yticks(range(n_shown))
+        ax.set_yticklabels([f"K{rows_shown[i]}" for i in range(n_shown)], fontsize=7)
         ax.set_xlabel("Zapomniana klasa", fontsize=10)
-        ax.set_ylabel("Klasa modelu", fontsize=10)
+        ax.set_ylabel("Klasa modelu (zbiór testowy)", fontsize=10)
         ax.set_title(METHOD_LABELS[method], fontsize=11, fontweight="bold")
 
         for col, fc in enumerate(classes_forgotten):
-            ax.add_patch(plt.Rectangle((col - 0.5, fc - 0.5), 1, 1,
-                                       fill=False, edgecolor="yellow", lw=2))
+            if fc in rows_shown:
+                row_idx = rows_shown.index(fc)
+                ax.add_patch(plt.Rectangle((col - 0.5, row_idx - 0.5), 1, 1,
+                                           fill=False, edgecolor="yellow", lw=2))
 
         plt.colorbar(im, ax=ax, label="Δ dokładność [pp]",
                      fraction=0.046, pad=0.04)
 
+    note_line = f"\n{filter_note}" if filter_note else ""
     fig.suptitle(
-        f"Zmiana dokładności per klasa (po − przed) — {dataset_name}\n"
-        f"Żółta ramka = zapomniana klasa. Niebieski = wzrost, Czerwony = spadek.",
+        f"Zmiana dokładności testowej per klasa (po − przed) — {dataset_name}\n"
+        f"Żółta ramka = zapomniana klasa. Niebieski = wzrost, Czerwony = spadek.{note_line}",
         fontsize=12, fontweight="bold",
     )
     plt.tight_layout()
     _save(fig, filename_base)
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
+
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -731,9 +724,11 @@ def main():
     cr10  = load_class_runs("cifar10")
     cr100 = load_class_runs("cifar100")
 
-    # próbkowe
-    plot_mia(sr10, sr100)
-    plot_utility_forget(sr10, sr100)
+    # próbkowe — MIA dumbbell (osobno per dataset)
+    plot_mia_dumbbell(sr10, sr100, mode="po_50")
+    plot_mia_dumbbell(sr10, sr100, mode="po_przed")
+
+    # próbkowe — przyspieszenie, kompromis, czasy
     plot_speedup(sr10, sr100)
     plot_tradeoff(sr10, sr100)
     plot_time(sr10, sr100)
@@ -745,16 +740,14 @@ def main():
     # klasowe — CIFAR-10
     plot_classwise(cr10,  "CIFAR-10",  "fig_classwise_cifar10")
     plot_ba_class(cr10,   "CIFAR-10",  "fig_ba_class_cifar10")
-    plot_forget_conf_kde(cr10,  "CIFAR-10",  "fig_forget_conf_kde_cifar10")
     plot_per_class_heatmap(cr10, "CIFAR-10", "fig_per_class_heatmap_cifar10")
 
     # klasowe — CIFAR-100
     plot_classwise(cr100, "CIFAR-100", "fig_classwise_cifar100")
     plot_ba_class(cr100,  "CIFAR-100", "fig_ba_class_cifar100")
-    plot_forget_conf_kde(cr100, "CIFAR-100", "fig_forget_conf_kde_cifar100")
     plot_per_class_heatmap(cr100, "CIFAR-100", "fig_per_class_heatmap_cifar100")
 
-    print(f"\n✓ Wszystkie wykresy zapisane do {OUT_DIR}/")
+    print(f"\n Saved to {OUT_DIR}/")
 
 
 if __name__ == "__main__":
