@@ -570,60 +570,66 @@ def _plot_before_after(ax, groups, group_labels, runs_or_class_runs,
 
 
 def plot_ba_class(class_runs, dataset_name, filename_base):
-    """Przed i po oduczeniu: $A(D_f)$ i $A(D_t)$ per zapomniana klasa."""
+    """Przed i po oduczeniu: $A(D_f)$ i $A(D_t)$ per zapomniana klasa — osobne figury."""
     classes = sorted(set(r["forget_class"] for r in class_runs))
     group_labels = [f"Klasa {c}" for c in classes]
 
-    fig, (ax_f, ax_t) = plt.subplots(1, 2, figsize=(14, 6))
-
+    # --- Df ---
+    fig_f, ax_f = plt.subplots(figsize=(9, 6))
     handles = _plot_before_after(ax_f, classes, group_labels, class_runs,
                                  "b_forget_acc", "a_forget_acc",
                                  "Dokładność na $D_f$ [%]",
                                  ideal_line=0.0, lookup_key="forget_class",
-                                 title="Dokładność na $D_f$ — przed i po")
-
-    _plot_before_after(ax_t, classes, group_labels, class_runs,
-                       "b_test_acc", "a_test_acc",
-                       "Dokładność na $D_t$ [%]",
-                       ideal_line=None, lookup_key="forget_class",
-                       title="Dokładność na $D_t$ — przed i po")
-
-    fig.suptitle(f"Oduczanie klasowe: przed i po oduczeniu — {dataset_name}",
-                 fontsize=13, fontweight="bold")
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-               fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
+                                 title=f"Oduczanie klasowe: $A(D_f)$ przed i po — {dataset_name}")
+    fig_f.legend(handles=handles, loc="lower center", ncol=len(handles),
+                 fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
     plt.tight_layout(rect=[0, 0.08, 1, 1])
-    _save(fig, filename_base)
+    _save(fig_f, f"{filename_base}_df")
+
+    # --- Dt ---
+    fig_t, ax_t = plt.subplots(figsize=(9, 6))
+    handles = _plot_before_after(ax_t, classes, group_labels, class_runs,
+                                 "b_test_acc", "a_test_acc",
+                                 "Dokładność na $D_t$ [%]",
+                                 ideal_line=None, lookup_key="forget_class",
+                                 title=f"Oduczanie klasowe: $A(D_t)$ przed i po — {dataset_name}")
+    fig_t.legend(handles=handles, loc="lower center", ncol=len(handles),
+                 fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+    _save(fig_t, f"{filename_base}_dt")
 
 
 def plot_ba_sample(sample_runs, dataset_name, filename_base):
-    """Przed i po oduczeniu: $A(D_f)$ i $A(D_t)$ per frakcja zapomnienia."""
+    """Przed i po oduczeniu: $A(D_f)$ i $A(D_t)$ per frakcja zapomnienia — osobne figury."""
     fracs = sorted(set(r["forget_fraction"] for r in sample_runs))
     group_labels = [f"{f*100:.2g}%" for f in fracs]
+    xlabel = "Frakcja zapomnienia $|D_f|$ / $|D_{train}|$"
 
-    fig, (ax_f, ax_t) = plt.subplots(1, 2, figsize=(14, 6))
-
+    # --- Df ---
+    fig_f, ax_f = plt.subplots(figsize=(9, 6))
     handles = _plot_before_after(ax_f, fracs, group_labels, sample_runs,
                                  "b_forget_acc", "a_forget_acc",
                                  "Dokładność na $D_f$ [%]",
                                  ideal_line=None, lookup_key="forget_fraction",
-                                 title="Dokładność na $D_f$ — przed i po")
-
-    _plot_before_after(ax_t, fracs, group_labels, sample_runs,
-                       "b_test_acc", "a_test_acc",
-                       "Dokładność na $D_t$[%]",
-                       ideal_line=None, lookup_key="forget_fraction",
-                       title="Dokładność na $D_t$— przed i po")
-
-    ax_f.set_xlabel("Frakcja zapomnienia $|D_f|$ / $|D_{train}|$", fontsize=11)
-    ax_t.set_xlabel("Frakcja zapomnienia $|D_f|$ / $|D_{train}|$", fontsize=11)
-
-    fig.suptitle(f"Oduczanie próbkowe: przed i po oduczeniu — {dataset_name}",
-                 fontsize=13, fontweight="bold")
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-               fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
+                                 title=f"Oduczanie próbkowe: $A(D_f)$ przed i po — {dataset_name}")
+    ax_f.set_xlabel(xlabel, fontsize=11)
+    fig_f.legend(handles=handles, loc="lower center", ncol=len(handles),
+                 fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
     plt.tight_layout(rect=[0, 0.08, 1, 1])
-    _save(fig, filename_base)
+    _save(fig_f, f"{filename_base}_df")
+
+    # --- Dt ---
+    fig_t, ax_t = plt.subplots(figsize=(9, 6))
+    handles = _plot_before_after(ax_t, fracs, group_labels, sample_runs,
+                                 "b_test_acc", "a_test_acc",
+                                 "Dokładność na $D_t$ [%]",
+                                 ideal_line=None, lookup_key="forget_fraction",
+                                 title=f"Oduczanie próbkowe: $A(D_t)$ przed i po — {dataset_name}")
+    ax_t.set_xlabel(xlabel, fontsize=11)
+    fig_t.legend(handles=handles, loc="lower center", ncol=len(handles),
+                 fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.02))
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+    _save(fig_t, f"{filename_base}_dt")
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +721,256 @@ def plot_per_class_heatmap(class_runs, dataset_name, filename_base,
 
 
 
+# ---------------------------------------------------------------------------
+# Confidence distribution plots (class-wise unlearning)
+# ---------------------------------------------------------------------------
+
+def plot_confidence_distributions(class_runs, dataset_name, filename_base, num_classes):
+    """
+    Two separate 1×3 figures:
+      {filename_base}_before  — histogram per method BEFORE unlearning, x=[0.7,1.0]
+      {filename_base}_after   — histogram per method AFTER  unlearning, x=[0,1]
+
+    Y-axis = number of forget-set samples.  Splitting before/after lets each
+    figure use the full page width in the thesis without crowding.
+    """
+    random_chance = 1.0 / num_classes
+
+    before_by_method = {m: [] for m in METHODS}
+    after_by_method  = {m: [] for m in METHODS}
+
+    for r in class_runs:
+        b_conf = r.get("b_forget_conf", [])
+        a_conf = r.get("a_forget_conf", [])
+        if not b_conf or not a_conf:
+            continue
+        before_by_method[r["method"]].extend(b_conf)
+        after_by_method[r["method"]].extend(a_conf)
+
+    if not any(before_by_method.values()):
+        print(f"  (pomijam {filename_base}: brak forget_conf)")
+        return
+
+    n_forget_classes = len(set(r["forget_class"] for r in class_runs))
+    n_samples = sum(len(v) for v in before_by_method.values()) // len(METHODS)
+    subtitle = f"(agregacja {n_forget_classes} klas zapomnienia, N={n_samples:,} próbek)"
+
+    # ── Figure 1: BEFORE ────────────────────────────────────────────────────
+    fig_b, axes_b = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    for col_idx, method in enumerate(METHODS):
+        ax = axes_b[col_idx]
+        vals = before_by_method[method]
+        if vals:
+            ax.hist(vals, bins=15, range=(0.7, 1.0),
+                    color=COLORS[method], alpha=0.78, edgecolor="white", lw=0.5)
+            mean_v = float(np.mean(vals))
+            ax.axvline(mean_v, color="black", ls="--", lw=1.8,
+                       label=f"Średnia = {mean_v:.3f}")
+        ax.set_xlim(0.7, 1.0)
+        ax.set_xlabel("Pewność modelu na praw. etykiecie $D_f$", fontsize=11)
+        ax.set_title(METHOD_LABELS[method], fontsize=12, fontweight="bold")
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3, axis="y")
+    axes_b[0].set_ylabel("Liczba próbek", fontsize=12)
+    fig_b.suptitle(
+        f"Pewność modelu na $D_f$ PRZED oduczeniem — {dataset_name}\n{subtitle}",
+        fontsize=13, fontweight="bold",
+    )
+    plt.tight_layout()
+    _save(fig_b, f"{filename_base}_before")
+
+    # ── Figure 2: AFTER ─────────────────────────────────────────────────────
+    fig_a, axes_a = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    for col_idx, method in enumerate(METHODS):
+        ax = axes_a[col_idx]
+        vals = after_by_method[method]
+        if vals:
+            ax.hist(vals, bins=25, range=(0.0, 1.0),
+                    color=COLORS[method], alpha=0.78, edgecolor="white", lw=0.5)
+            ax.axvline(random_chance, color="black", ls=":", lw=2,
+                       label=f"Losowe (1/{num_classes})")
+            mean_v = float(np.mean(vals))
+            ax.axvline(mean_v, color=COLORS[method], ls="--", lw=1.8,
+                       label=f"Średnia = {mean_v:.3f}")
+        ax.set_xlim(0, 1)
+        ax.set_xlabel("Pewność modelu na praw. etykiecie $D_f$", fontsize=11)
+        ax.set_title(METHOD_LABELS[method], fontsize=12, fontweight="bold")
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3, axis="y")
+    axes_a[0].set_ylabel("Liczba próbek", fontsize=12)
+    fig_a.suptitle(
+        f"Pewność modelu na $D_f$ PO oduczeniu — {dataset_name}\n{subtitle}",
+        fontsize=13, fontweight="bold",
+    )
+    plt.tight_layout()
+    _save(fig_a, f"{filename_base}_after")
+
+
+def plot_confidence_distributions_perclass(class_runs, dataset_name, filename_base,
+                                           num_classes):
+    """
+    Per-forgotten-class histograms after unlearning.
+
+    Layout: rows = methods, cols = forgotten classes.
+    Y-axis = number of forget-set samples in each confidence bin (0–1).
+
+    For naive_retrain / SISA the confidence collapses to ~0, so the histogram
+    shows a single tall bar on the left — replaced here by a plain annotation
+    box to avoid scale distortion while still communicating the result clearly.
+
+    grad_tau row shows the actual histogram, making class-to-class variation
+    in forgetting quality directly visible.
+    """
+    random_chance = 1.0 / num_classes
+    forget_classes = sorted(set(r["forget_class"] for r in class_runs))
+    n_cols = len(forget_classes)
+    n_rows = len(METHODS)
+
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(5 * n_cols, 4 * n_rows),
+                             sharex=False)
+
+    if n_rows == 1:
+        axes = [axes]
+    if n_cols == 1:
+        axes = [[row] for row in axes]
+
+    DEGENERATE_STD = 0.02
+
+    for row_idx, method in enumerate(METHODS):
+        for col_idx, fc in enumerate(forget_classes):
+            ax = axes[row_idx][col_idx]
+            run = next((r for r in class_runs
+                        if r["method"] == method and r["forget_class"] == fc), None)
+
+            if run is None:
+                ax.axis("off")
+                continue
+
+            b_conf = np.asarray(run.get("b_forget_conf", []), dtype=float)
+            a_conf = np.asarray(run.get("a_forget_conf", []), dtype=float)
+            if len(b_conf) == 0 or len(a_conf) == 0:
+                ax.axis("off")
+                continue
+
+            degenerate = float(a_conf.std()) < DEGENERATE_STD
+
+            if degenerate:
+                frac_near_zero = float((a_conf < 0.01).mean()) * 100
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.text(0.5, 0.52,
+                        f"Pewność → 0\n\nśr. = {a_conf.mean():.5f}\n"
+                        f"{frac_near_zero:.0f}% próbek < 0.01",
+                        transform=ax.transAxes, ha="center", va="center",
+                        fontsize=12, fontweight="bold",
+                        bbox=dict(boxstyle="round,pad=0.6", fc=COLORS[method],
+                                  alpha=0.15, ec=COLORS[method], lw=1.5))
+                ax.tick_params(left=False, bottom=False,
+                               labelleft=False, labelbottom=False)
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+            else:
+                ax.hist(a_conf, bins=25, range=(0, 1),
+                        color=COLORS[method], alpha=0.75,
+                        edgecolor="white", lw=0.5)
+                ax.axvline(random_chance, color="black", ls=":", lw=1.8,
+                           label=f"Losowe (1/{num_classes})")
+                mean_a = float(a_conf.mean())
+                ax.axvline(mean_a, color=COLORS[method], ls="--", lw=1.8,
+                           label=f"Średnia = {mean_a:.3f}")
+                ax.set_xlim(0, 1)
+                ax.set_ylim(bottom=0)
+                ax.legend(fontsize=8, loc="upper right")
+                ax.grid(True, alpha=0.25, axis="y")
+
+            if col_idx == 0:
+                ax.set_ylabel(f"{METHOD_LABELS[method]}\nLiczba próbek",
+                              fontsize=9, fontweight="bold")
+            if row_idx == 0:
+                ax.set_title(f"Zapomniana klasa {fc}", fontsize=10, fontweight="bold")
+            if row_idx == n_rows - 1 and not degenerate:
+                ax.set_xlabel("Pewność modelu na praw. etykiecie", fontsize=9)
+
+    fig.suptitle(
+        f"Liczba próbek $D_f$ wg pewności modelu po oduczeniu — {dataset_name}\n"
+        f"(metody z zapadaniem do 0 pokazane jako adnotacja)",
+        fontsize=12, fontweight="bold",
+    )
+    plt.tight_layout()
+    _save(fig, filename_base)
+
+
+def plot_mia_classwise(class_runs, dataset_name, filename_base):
+    """
+    Dumbbell MIA for class-wise unlearning — one figure, two panels (MIA-L / MIA-E).
+
+    X-axis: which class was forgotten (discrete).
+    Each method has a small x-jitter.  A segment connects before (hollow circle)
+    to after (filled circle).  Reference line at 50% (ideal for sample-wise MIA).
+
+    Key story: after class-wise unlearning, naive_retrain and SISA push MIA
+    UP to ~95% — NOT toward 50%.  The model has never seen the forgotten class,
+    so its loss is huge on those samples and the MIA classifier trivially separates
+    them.  grad_tau on CIFAR-100 does the opposite: MIA drops below 50%.
+    This shows MIA is a flawed metric for class-wise unlearning evaluation.
+    """
+    forget_classes = sorted(set(r["forget_class"] for r in class_runs))
+    n_cls = len(forget_classes)
+    x_pos = {fc: i for i, fc in enumerate(forget_classes)}
+
+    jitter = {"naive_retrain": -0.18, "grad_tau": 0.0, "sisa": +0.18}
+    mia_pairs = [("b_mia_l", "a_mia_l", "MIA-Loss"),
+                 ("b_mia_e", "a_mia_e", "MIA-Entropy")]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+
+    for col_idx, (bkey, akey, mia_name) in enumerate(mia_pairs):
+        ax = axes[col_idx]
+
+        for method in METHODS:
+            color = COLORS[method]
+            j = jitter[method]
+            rows = [r for r in class_runs if r["method"] == method]
+
+            for r in rows:
+                fc = r["forget_class"]
+                x = x_pos[fc] + j
+                b_val = r[bkey]
+                a_val = r[akey]
+
+                ax.plot([x, x], [b_val, a_val], color=color, lw=2.0, alpha=0.7, zorder=3)
+                ax.scatter([x], [b_val], color=color, s=60, zorder=5,
+                           facecolors="none", linewidths=1.8)   # hollow = before
+                ax.scatter([x], [a_val], color=color, s=60, zorder=5)  # filled = after
+
+        ax.axhline(50, color="black", ls=":", lw=1.8, label="Ideał MIA (50%)")
+        ax.set_xticks(range(n_cls))
+        ax.set_xticklabels([f"Klasa {fc}" for fc in forget_classes], fontsize=11)
+        ax.set_xlim(-0.5, n_cls - 0.5)
+        ax.set_ylim(30, 105)
+        ax.set_ylabel("Dokładność ataku MIA [%]", fontsize=11)
+        ax.set_title(mia_name, fontsize=12, fontweight="bold")
+        ax.grid(True, alpha=0.3, axis="y")
+
+    method_h = [mpatches.Patch(color=COLORS[m], label=METHOD_LABELS[m])
+                for m in METHODS]
+    style_h = [
+        plt.Line2D([0], [0], color="gray", lw=0, marker="o", ms=8,
+                   mfc="none", mew=1.8, label="Przed oduczeniem"),
+        plt.Line2D([0], [0], color="gray", lw=0, marker="o", ms=8,
+                   label="Po oduczeniu"),
+        plt.Line2D([0], [0], color="black", lw=1.8, ls=":", label="Ideał (50%)"),
+    ]
+    fig.legend(handles=method_h + style_h, loc="lower center",
+               bbox_to_anchor=(0.5, -0.02), ncol=len(method_h + style_h),
+               fontsize=10, frameon=True)
+    fig.suptitle(f"MIA przed i po oduczeniu klasowym — {dataset_name}",
+                 fontsize=13, fontweight="bold")
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+    _save(fig, filename_base)
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"\nGenerowanie wykresów → {OUT_DIR}/\n")
@@ -746,6 +1002,16 @@ def main():
     plot_classwise(cr100, "CIFAR-100", "fig_classwise_cifar100")
     plot_ba_class(cr100,  "CIFAR-100", "fig_ba_class_cifar100")
     plot_per_class_heatmap(cr100, "CIFAR-100", "fig_per_class_heatmap_cifar100")
+
+    # rozkłady pewności — klasowe
+    plot_confidence_distributions(cr10,  "CIFAR-10",  "fig_conf_dist_cifar10",  num_classes=10)
+    plot_confidence_distributions(cr100, "CIFAR-100", "fig_conf_dist_cifar100", num_classes=100)
+    plot_confidence_distributions_perclass(cr10,  "CIFAR-10",  "fig_conf_dist_perclass_cifar10",  num_classes=10)
+    plot_confidence_distributions_perclass(cr100, "CIFAR-100", "fig_conf_dist_perclass_cifar100", num_classes=100)
+
+    # MIA klasowe — dumbbell przed/po
+    plot_mia_classwise(cr10,  "CIFAR-10",  "fig_mia_classwise_cifar10")
+    plot_mia_classwise(cr100, "CIFAR-100", "fig_mia_classwise_cifar100")
 
     print(f"\n Saved to {OUT_DIR}/")
 
