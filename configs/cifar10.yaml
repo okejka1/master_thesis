@@ -29,6 +29,19 @@ sisa_shards: 5          # number of disjoint data shards (S)
 sisa_slices: 10         # number of sequential slices per shard (R)
 sisa_aggregation: soft_vote   # "soft_vote" | "majority_vote"
 
+# ── OvR (One-vs-Rest ensemble) Unlearning ────────────────────────────────────
+# One dedicated BINARY classifier per class ("class i vs. the rest"). A class's
+# POSITIVE influence lives in exactly one sub-model → class-wise unlearning can be
+# a single model DROP (O(1)). Its NEGATIVE influence is diffuse (it was a negative
+# in every other sub-model) → measured/optionally retrained. See OVR_implementation_reference.md.
+ovr_neg_ratio: 2.0       # |negatives| / |positives| per sub-model (balanced batches used)
+ovr_slices: 1            # R: SISA-style slices per sub-model (1 = no slicing). Set 5 to match SISA.
+ovr_epochs:              # null → use num_epochs. Binary task is easier; fewer epochs often suffice.
+ovr_variant:             # null → auto: "drop" (class strategy) | "slice_resume" (random strategy)
+                         #   "drop"            — class-wise: deactivate f_k, no retraining (approximate)
+                         #   "drop_neg_retrain"— class-wise: drop f_k AND retrain survivors w/o class-k negatives (exact-within-arch)
+                         #   "slice_resume"    — sample-wise: retrain affected sub-models without forget samples
+
 # ── ∇τ Gradient-based Unlearning ─────────────────────────────────────────────
 # Paper: arxiv.org/abs/2403.14339 — Trippa et al., 2024
 #

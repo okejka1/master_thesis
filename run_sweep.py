@@ -126,6 +126,11 @@ def sisa_base_dir(ckpt_root: str, seed: int, dataset: str) -> str:
     return os.path.join(ckpt_root, f"seed_{seed}", dataset, "sisa")
 
 
+def ovr_base_dir(ckpt_root: str, seed: int, dataset: str) -> str:
+    """Root passed to ovr.py --checkpoint-dir (holds the ovr_<dataset>/ tree)."""
+    return os.path.join(ckpt_root, f"seed_{seed}", dataset, "ovr")
+
+
 def method_out_dir(ckpt_root: str, seed: int, dataset: str,
                    sweep: str, method: str, key: str) -> str:
     """
@@ -172,6 +177,8 @@ def result_json(ckpt_root: str, seed: int, dataset: str,
         return os.path.join(d, f"grad_tau_{dataset}_results.json")
     if method == "sisa":
         return os.path.join(d, "unlearn_results.json")
+    if method == "ovr":
+        return os.path.join(d, "unlearn_results.json")
     raise ValueError(f"Unknown method: {method!r}")
 
 
@@ -213,6 +220,24 @@ def maybe_train_sisa(ckpt_root: str, seed: int, dataset: str,
     )
 
 
+def maybe_train_ovr(ckpt_root: str, seed: int, dataset: str,
+                    data_root: str) -> None:
+    od = ovr_base_dir(ckpt_root, seed, dataset)
+    os.makedirs(od, exist_ok=True)
+    sentinel = os.path.join(od, f"ovr_{dataset}", "ensemble_meta.json")
+    if os.path.exists(sentinel):
+        print(f"  [train ovr] SKIP — ensemble_meta.json exists")
+        return
+    run_script(
+        ["ovr.py", "--mode", "train",
+         "--config",         f"configs/{dataset}.yaml",
+         "--data-root",      data_root,
+         "--checkpoint-dir", od,
+         "--seed",           seed],
+        label=f"train ovr  seed={seed}  {dataset}",
+    )
+
+
 # ── Sample-wise sweep ─────────────────────────────────────────────────────────
 
 def run_sample_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
@@ -221,6 +246,7 @@ def run_sample_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
     original_ckpt = os.path.join(
         base_dir(ckpt_root, seed, dataset), f"resnet18_{dataset}_best.pth")
     sd = sisa_base_dir(ckpt_root, seed, dataset)
+    od = ovr_base_dir(ckpt_root, seed, dataset)
 
     for frac in fractions:
         key = frac_key(frac)
@@ -277,6 +303,21 @@ def run_sample_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
                 label=f"sisa      frac={pct}",
             )
 
+        if "ovr" in methods:
+            out = method_out_dir(ckpt_root, seed, dataset, "sample_wise", "ovr", key)
+            os.makedirs(out, exist_ok=True)
+            run_script(
+                ["ovr.py", "--mode", "unlearn",
+                 "--config",          f"configs/{dataset}.yaml",
+                 "--data-root",       data_root,
+                 "--checkpoint-dir",  od,
+                 "--output-dir",      out,
+                 "--seed",            seed,
+                 "--forget-fraction", frac],   # random strategy → variant auto = slice_resume
+                sentinel=result_json(ckpt_root, seed, dataset, "sample_wise", "ovr", key),
+                label=f"ovr       frac={pct}",
+            )
+
 
 # ── Class-wise sweep ──────────────────────────────────────────────────────────
 
@@ -286,6 +327,7 @@ def run_class_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
     original_ckpt = os.path.join(
         base_dir(ckpt_root, seed, dataset), f"resnet18_{dataset}_best.pth")
     sd = sisa_base_dir(ckpt_root, seed, dataset)
+    od = ovr_base_dir(ckpt_root, seed, dataset)
 
     for cls in classes:
         key = class_key(cls)
@@ -342,6 +384,22 @@ def run_class_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
                 sisa_args,
                 sentinel=result_json(ckpt_root, seed, dataset, "class_wise", "sisa", key),
                 label=f"sisa      class={cls}",
+            )
+
+        if "ovr" in methods:
+            out = method_out_dir(ckpt_root, seed, dataset, "class_wise", "ovr", key)
+            os.makedirs(out, exist_ok=True)
+            run_script(
+                ["ovr.py", "--mode", "unlearn",
+                 "--config",          f"configs/{dataset}.yaml",
+                 "--data-root",       data_root,
+                 "--checkpoint-dir",  od,
+                 "--output-dir",      out,
+                 "--seed",            seed,
+                 "--forget-strategy", "class",
+                 "--forget-class",    cls],   # class strategy → variant auto = drop
+                sentinel=result_json(ckpt_root, seed, dataset, "class_wise", "ovr", key),
+                label=f"ovr       class={cls}",
             )
 
 
@@ -421,6 +479,10 @@ def parse_args():
                    help="Skip ∇τ unlearning.")
     p.add_argument("--no-sisa",     dest="no_sisa",     action="store_true",
                    help="Skip SISA unlearning (also skips SISA training).")
+    p.add_argument("--ovr",         dest="ovr",         action="store_true",
+                   help="Enable OvR (One-vs-Rest ensemble) unlearning. OFF by "
+                        "default — training c independent ResNet-18s (100 for "
+                        "CIFAR-100) is far heavier than the other methods.")
     p.add_argument("--ckpt-dir",  default="./checkpoints",
                    help="Root checkpoint directory.")
     p.add_argument("--data-dir",  default="./data",
@@ -446,6 +508,7 @@ def main():
     if not args.no_naive:    methods.append("naive")
     if not args.no_grad_tau: methods.append("grad_tau")
     if not args.no_sisa:     methods.append("sisa")
+    if args.ovr:             methods.append("ovr")
     if not methods:
         print("ERROR: all methods disabled — nothing to run.")
         sys.exit(1)
@@ -483,6 +546,8 @@ def main():
             maybe_train_base(ckpt_root, seed, args.dataset, data_root)
             if "sisa" in methods:
                 maybe_train_sisa(ckpt_root, seed, args.dataset, data_root)
+            if "ovr" in methods:
+                maybe_train_ovr(ckpt_root, seed, args.dataset, data_root)
 
             # ── Unlearning sweeps ─────────────────────────────────────────────
             if do_sample:
