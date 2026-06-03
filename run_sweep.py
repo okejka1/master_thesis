@@ -25,13 +25,19 @@ checkpoints/
         │   │   └── frac_05pct/…
         │   ├── grad_tau/
         │   │   └── frac_01pct/grad_tau_cifar10_results.json
-        │   └── sisa/
+        │   ├── sisa/
+        │   │   └── frac_01pct/unlearn_results.json
+        │   └── ovr/
         │       └── frac_01pct/unlearn_results.json
         └── class_wise/
             ├── naive/
             │   └── class_0/naive_cifar10_results.json
             ├── grad_tau/
-            └── sisa/
+            ├── sisa/
+            │   └── class_0/unlearn_results.json
+            ├── ovr_drop/
+            │   └── class_0/unlearn_results.json
+            └── ovr_drop_neg_retrain/
                 └── class_0/unlearn_results.json
 
 Collected results per seed
@@ -175,9 +181,7 @@ def result_json(ckpt_root: str, seed: int, dataset: str,
         return os.path.join(d, f"naive_{dataset}_results.json")
     if method == "grad_tau":
         return os.path.join(d, f"grad_tau_{dataset}_results.json")
-    if method == "sisa":
-        return os.path.join(d, "unlearn_results.json")
-    if method == "ovr":
+    if method in ("sisa",) or method.startswith("ovr"):
         return os.path.join(d, "unlearn_results.json")
     raise ValueError(f"Unknown method: {method!r}")
 
@@ -323,6 +327,7 @@ def run_sample_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
 
 def run_class_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
                     classes: list[int], methods: list[str],
+                    ovr_class_variants: list[str] | None = None,
                     save_unlearned_ckpts: bool = False) -> None:
     original_ckpt = os.path.join(
         base_dir(ckpt_root, seed, dataset), f"resnet18_{dataset}_best.pth")
@@ -387,27 +392,31 @@ def run_class_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
             )
 
         if "ovr" in methods:
-            out = method_out_dir(ckpt_root, seed, dataset, "class_wise", "ovr", key)
-            os.makedirs(out, exist_ok=True)
-            run_script(
-                ["ovr.py", "--mode", "unlearn",
-                 "--config",          f"configs/{dataset}.yaml",
-                 "--data-root",       data_root,
-                 "--checkpoint-dir",  od,
-                 "--output-dir",      out,
-                 "--seed",            seed,
-                 "--forget-strategy", "class",
-                 "--forget-class",    cls],   # class strategy → variant auto = drop
-                sentinel=result_json(ckpt_root, seed, dataset, "class_wise", "ovr", key),
-                label=f"ovr       class={cls}",
-            )
+            for variant in (ovr_class_variants or ["drop"]):
+                method_key = f"ovr_{variant}"
+                out = method_out_dir(ckpt_root, seed, dataset, "class_wise", method_key, key)
+                os.makedirs(out, exist_ok=True)
+                run_script(
+                    ["ovr.py", "--mode", "unlearn",
+                     "--config",          f"configs/{dataset}.yaml",
+                     "--data-root",       data_root,
+                     "--checkpoint-dir",  od,
+                     "--output-dir",      out,
+                     "--seed",            seed,
+                     "--forget-strategy", "class",
+                     "--forget-class",    cls,
+                     "--ovr-variant",     variant],
+                    sentinel=result_json(ckpt_root, seed, dataset, "class_wise", method_key, key),
+                    label=f"ovr_{variant:<16} class={cls}",
+                )
 
 
 # ── Collect ───────────────────────────────────────────────────────────────────
 
 def collect(ckpt_root: str, seed: int, dataset: str,
             fractions: list[float], classes: list[int],
-            methods: list[str], do_sample: bool, do_class: bool) -> None:
+            methods: list[str], do_sample: bool, do_class: bool,
+            ovr_class_variants: list[str] | None = None) -> None:
     """Gather all complete results for this seed into per-sweep JSON files."""
 
     seed_root = os.path.join(ckpt_root, f"seed_{seed}")
@@ -422,15 +431,27 @@ def collect(ckpt_root: str, seed: int, dataset: str,
         if sweep == "class_wise" and not do_class:
             continue
 
+        # For class-wise OvR, expand "ovr" into one entry per variant.
+        sweep_methods = []
+        for m in methods:
+            if m == "ovr" and sweep == "class_wise":
+                sweep_methods.extend(
+                    f"ovr_{v}" for v in (ovr_class_variants or ["drop"]))
+            else:
+                sweep_methods.append(m)
+
         records, missing = [], []
         raw_keys = fractions if sweep == "sample_wise" else classes
 
         for raw_key, key in zip(raw_keys, keys):
-            for method in methods:
+            for method in sweep_methods:
                 fp = result_json(ckpt_root, seed, dataset, sweep, method, key)
                 if is_complete(fp):
                     with open(fp) as f:
-                        records.append(json.load(f))
+                        record = json.load(f)
+                    if sweep == "class_wise":
+                        record["forget_class"] = raw_key
+                    records.append(record)
                 else:
                     missing.append({
                         "method": method,
@@ -483,6 +504,12 @@ def parse_args():
                    help="Enable OvR (One-vs-Rest ensemble) unlearning. OFF by "
                         "default — training c independent ResNet-18s (100 for "
                         "CIFAR-100) is far heavier than the other methods.")
+    p.add_argument("--ovr-class-variants", dest="ovr_class_variants",
+                   nargs="+", default=["drop"],
+                   choices=["drop", "drop_neg_retrain"],
+                   help="Class-wise OvR variants to run. Each variant gets its "
+                        "own output directory (ovr_drop/, ovr_drop_neg_retrain/). "
+                        "Sample-wise OvR always uses slice_resume.")
     p.add_argument("--ckpt-dir",  default="./checkpoints",
                    help="Root checkpoint directory.")
     p.add_argument("--data-dir",  default="./data",
@@ -529,6 +556,8 @@ def main():
     print(f"  Dataset   : {args.dataset}")
     print(f"  Seeds     : {args.seeds}")
     print(f"  Methods   : {methods}")
+    if args.ovr and do_class:
+        print(f"  OvR class variants : {args.ovr_class_variants}")
     if do_sample:
         print(f"  Fractions : {args.fractions}")
     if do_class:
@@ -557,6 +586,7 @@ def main():
             if do_class:
                 run_class_sweep(ckpt_root, seed, args.dataset, data_root,
                                 classes, methods,
+                                ovr_class_variants=args.ovr_class_variants,
                                 save_unlearned_ckpts=args.save_unlearned_ckpts)
 
         # ── Collect ───────────────────────────────────────────────────────────
@@ -565,7 +595,8 @@ def main():
         print(f"{'─'*62}")
         collect(ckpt_root, seed, args.dataset,
                 args.fractions, classes, methods,
-                do_sample, do_class)
+                do_sample, do_class,
+                ovr_class_variants=args.ovr_class_variants)
 
     print(f"\n{'#'*65}")
     print(f"  Sweep done.")

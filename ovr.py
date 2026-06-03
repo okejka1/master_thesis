@@ -27,9 +27,14 @@ Usage
     python ovr.py --mode unlearn --config configs/cifar10.yaml \
                   --forget-strategy class --forget-class 3 --ovr-variant drop_neg_retrain
 
-# Sample-wise unlearning (retrain affected sub-models):
+# Sample-wise unlearning — full retrain (ovr_slices=1, default):
     python ovr.py --mode unlearn --config configs/cifar10.yaml \
                   --forget-strategy random --forget-fraction 0.01 --ovr-variant slice_resume
+
+# Sample-wise unlearning — slice resume (requires ovr_slices>1 at train time):
+    python ovr.py --mode unlearn --config configs/cifar10.yaml \
+                  --forget-strategy random --forget-fraction 0.01 --ovr-variant slice_resume \
+                  --ovr-slices 5
 
 # Separate ensemble tree from results output (used by run_sweep.py):
     python ovr.py --mode unlearn --config configs/cifar10.yaml \
@@ -53,7 +58,7 @@ import yaml
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from models import build_resnet18
-from mia import _train_attacker, run_mia_suite
+from mia import run_mia_suite
 from utils import (
     evaluate,
     forget_sample_confidences,
@@ -263,35 +268,67 @@ def train_binary_model(class_id: int,
                        device: torch.device,
                        save_path: str | None = None,
                        verbose: bool = True) -> nn.Module:
-    """Train one binary sub-model.  Persists to *save_path* if given (else the
-    model is returned without being written to disk — used during retraining)."""
+    """Train one binary sub-model with optional SISA-style slicing.
+
+    When ovr_slices > 1, pos/neg are split into cumulative slices and a
+    slice_XX.pth checkpoint (with optimizer state) is saved after each slice,
+    enabling slice_resume unlearning without full retraining.
+    """
     epochs = ovr_epochs_of(cfg)
+    num_slices = cfg.get("ovr_slices") or 1
+    epochs_per_slice = max(1, epochs // num_slices)
+
     model = build_ovr_binary().to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.SGD(model.parameters(), lr=cfg["lr"],
                           momentum=cfg["momentum"],
                           weight_decay=cfg["weight_decay"], nesterov=True)
+    # Single scheduler spanning all epochs — milestones are absolute epoch numbers.
     scheduler = optim.lr_scheduler.MultiStepLR(
         optimizer, milestones=cfg["lr_milestones"], gamma=cfg["lr_gamma"])
 
-    loader = balanced_loader(base_train, pos, neg, cfg["batch_size"])
+    pos_raw = [chunk.tolist() for chunk in np.array_split(np.array(pos), num_slices)]
+    neg_raw = [chunk.tolist() for chunk in np.array_split(np.array(neg), num_slices)]
 
     if verbose:
         print(f"  class {class_id:>3}  |  {len(pos)} pos / {len(neg)} neg  "
-              f"|  {epochs} epochs")
+              f"|  {epochs} epochs  |  {num_slices} slice(s)")
 
-    for epoch in range(1, epochs + 1):
-        loss, acc = train_binary_epoch(model, loader, criterion, optimizer, device)
-        scheduler.step()
-        if verbose and (epoch == 1 or epoch % max(1, epochs // 5) == 0
-                        or epoch == epochs):
-            print(f"      epoch {epoch:>3}  lr {scheduler.get_last_lr()[0]:.5f}  "
-                  f"bce {loss:.4f}  bal-acc {acc:.2f}%")
+    cum_pos: list[int] = []
+    cum_neg: list[int] = []
+    total_epoch = 0
+
+    for slice_id in range(num_slices):
+        cum_pos += pos_raw[slice_id]
+        cum_neg += neg_raw[slice_id]
+        loader = balanced_loader(base_train, cum_pos, cum_neg, cfg["batch_size"])
+
+        for epoch in range(1, epochs_per_slice + 1):
+            total_epoch += 1
+            loss, acc = train_binary_epoch(model, loader, criterion, optimizer, device)
+            scheduler.step()
+            if verbose and (total_epoch == 1 or
+                            total_epoch % max(1, epochs // 5) == 0 or
+                            total_epoch == epochs):
+                print(f"      epoch {total_epoch:>3}  lr {scheduler.get_last_lr()[0]:.5f}  "
+                      f"bce {loss:.4f}  bal-acc {acc:.2f}%")
+
+        if save_path is not None and num_slices > 1:
+            slice_dir = os.path.dirname(save_path)
+            os.makedirs(slice_dir, exist_ok=True)
+            torch.save({
+                "epoch":       total_epoch,
+                "model_state": model.state_dict(),
+                "optim_state": optimizer.state_dict(),
+                "class_id":    class_id,
+                "slice_id":    slice_id,
+                "num_slices":  num_slices,
+            }, os.path.join(slice_dir, f"slice_{slice_id:02d}.pth"))
 
     if save_path is not None:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         save_checkpoint(
-            model, save_path, epoch=epochs, test_acc=0.0,
+            model, save_path, epoch=total_epoch, test_acc=0.0,
             dataset=cfg["dataset"], num_classes=num_classes_of(cfg["dataset"]),
             extra={"class_id": class_id, "binary": True,
                    "n_pos": len(pos), "n_neg": len(neg),
@@ -370,6 +407,101 @@ def retrain_binary_model(class_id: int,
     return model, stats
 
 
+def resume_binary_from_slice(class_id: int,
+                              pos: list[int],
+                              neg: list[int],
+                              forget_set: set[int],
+                              class_dir: str,
+                              base_train,
+                              cfg: dict,
+                              device: torch.device) -> tuple[nn.Module, dict]:
+    """Slice-aware retrain mirroring SISA's retrain_shard.
+
+    Loads the checkpoint from the slice just before the first affected one,
+    then retrains remaining slices without forget samples.  Falls back to
+    full retrain if slice checkpoints are absent (e.g. trained with ovr_slices=1).
+    """
+    num_slices = cfg.get("ovr_slices") or 1
+    epochs = ovr_epochs_of(cfg)
+    epochs_per_slice = max(1, epochs // num_slices)
+
+    pos_raw = [chunk.tolist() for chunk in np.array_split(np.array(pos), num_slices)]
+    neg_raw = [chunk.tolist() for chunk in np.array_split(np.array(neg), num_slices)]
+
+    first_affected = next(
+        (s for s in range(num_slices)
+         if forget_set & (set(pos_raw[s]) | set(neg_raw[s]))),
+        num_slices,
+    )
+
+    if first_affected == 0 or num_slices == 1:
+        model = build_ovr_binary().to(device)
+        optimizer = optim.SGD(model.parameters(), lr=cfg["lr"],
+                              momentum=cfg["momentum"],
+                              weight_decay=cfg["weight_decay"], nesterov=True)
+        start_epoch = 0
+    else:
+        prev_ckpt_path = os.path.join(class_dir, f"slice_{first_affected - 1:02d}.pth")
+        if not os.path.exists(prev_ckpt_path):
+            print(f"    WARNING: {prev_ckpt_path} not found — falling back to full retrain")
+            return retrain_binary_model(class_id, pos, neg, forget_set,
+                                        base_train, cfg, device)
+        ckpt = torch.load(prev_ckpt_path, map_location=device)
+        model = build_ovr_binary().to(device)
+        model.load_state_dict(ckpt["model_state"])
+        optimizer = optim.SGD(model.parameters(), lr=cfg["lr"],
+                              momentum=cfg["momentum"],
+                              weight_decay=cfg["weight_decay"], nesterov=True)
+        optimizer.load_state_dict(ckpt["optim_state"])
+        start_epoch = ckpt["epoch"]
+        print(f"    class {class_id}: loaded slice_{first_affected - 1:02d}.pth "
+              f"(epoch {start_epoch}), retraining from slice {first_affected}")
+
+    # Scheduler resumes from start_epoch — milestones are still absolute.
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=cfg["lr_milestones"],
+        gamma=cfg["lr_gamma"],
+        last_epoch=start_epoch - 1,
+    )
+    criterion = nn.BCEWithLogitsLoss()
+
+    cum_pos = [i for s in range(first_affected) for i in pos_raw[s] if i not in forget_set]
+    cum_neg = [i for s in range(first_affected) for i in neg_raw[s] if i not in forget_set]
+
+    total_retrain_epochs = 0
+    t0 = time.time()
+
+    for s_id in range(first_affected, num_slices):
+        cum_pos += [i for i in pos_raw[s_id] if i not in forget_set]
+        cum_neg += [i for i in neg_raw[s_id] if i not in forget_set]
+        loader = balanced_loader(base_train, cum_pos, cum_neg, cfg["batch_size"])
+
+        print(f"    Retraining slice {s_id}/{num_slices - 1}  "
+              f"({len(cum_pos)} pos, {len(cum_neg)} neg)  "
+              f"→ {epochs_per_slice} epochs")
+
+        for epoch in range(1, epochs_per_slice + 1):
+            total_retrain_epochs += 1
+            loss, acc = train_binary_epoch(model, loader, criterion, optimizer, device)
+            scheduler.step()
+            print(f"      epoch {start_epoch + total_retrain_epochs:>3}  "
+                  f"lr {scheduler.get_last_lr()[0]:.5f}  "
+                  f"bce {loss:.4f}  bal-acc {acc:.2f}%")
+
+    stats = {
+        "class_id":             class_id,
+        "retrained":            True,
+        "first_affected_slice": first_affected,
+        "slices_retrained":     num_slices - first_affected,
+        "epochs_retrained":     total_retrain_epochs,
+        "removed_pos":          sum(1 for i in pos if i in forget_set),
+        "removed_neg":          sum(1 for i in neg if i in forget_set),
+        "retrain_time_s":       time.time() - t0,
+    }
+    return model, stats
+
+
 # ── OVR-specific metrics ──────────────────────────────────────────────────────
 
 def negative_footprint(assignment: dict, forgotten_classes: list[int],
@@ -398,39 +530,6 @@ def negative_footprint(assignment: dict, forgotten_classes: list[int],
         "models_touched": len(touched_models),
         "n_active_models": len(active_classes),
     }
-
-
-@torch.no_grad()
-def negative_membership_mia(ensemble: OvREnsemble,
-                            forget_loader: DataLoader,
-                            testk_loader: DataLoader,
-                            device: torch.device,
-                            seed: int) -> float:
-    """OVR-specific attack: after dropping f_k, can an attacker tell that the
-    forgotten class-k TRAIN samples were used as NEGATIVES in surviving models?
-
-    Feature = mean sigmoid over active sub-models (a sample suppressed as a
-    negative reads lower).  Members (label 1) = forget train-class-k, non-members
-    (label 0) = held-out test-class-k.  Score near 50% ⇒ footprint undetectable.
-    Returns 0–1 accuracy, or -1.0 if there is nothing to attack."""
-    active = ensemble.active.to(device)
-
-    def feats(loader):
-        out = []
-        for images, _ in loader:
-            images = images.to(device)
-            logits = torch.stack([m(images).squeeze(1)
-                                  for m in ensemble.submodels], dim=1)  # (B,c)
-            probs = torch.sigmoid(logits)
-            probs = probs.masked_fill(~active.unsqueeze(0), float("nan"))
-            out.append(torch.nanmean(probs, dim=1).cpu().numpy())
-        return np.concatenate(out) if out else np.array([])
-
-    f = feats(forget_loader)
-    t = feats(testk_loader)
-    if len(f) == 0 or len(t) == 0:
-        return -1.0
-    return _train_attacker(f, t, seed=seed)
 
 
 # ── Eval bundle (one ensemble snapshot → all metrics) ───────────────────────
@@ -623,14 +722,22 @@ def run_unlearn(cfg: dict, device: torch.device):
 
     elif variant == "slice_resume":
         # Sample-wise: retrain every sub-model whose pos OR neg overlaps the forget set.
+        # When ovr_slices > 1, resume from the last clean slice checkpoint instead
+        # of retraining from scratch (mirrors SISA's retrain_shard).
+        num_slices = cfg.get("ovr_slices") or 1
         for i in range(c):
             pos = assignment[str(i)]["pos"]
             neg = assignment[str(i)]["neg"]
             if not (forget_set & (set(pos) | set(neg))):
                 continue  # short-circuit: unaffected
             set_seed(cfg["seed"] + i)
-            new_m, st = retrain_binary_model(i, pos, neg, forget_set,
-                                             train_ds, cfg, device)
+            if num_slices > 1:
+                class_dir = os.path.join(ovr_dir, f"class_{i}")
+                new_m, st = resume_binary_from_slice(
+                    i, pos, neg, forget_set, class_dir, train_ds, cfg, device)
+            else:
+                new_m, st = retrain_binary_model(
+                    i, pos, neg, forget_set, train_ds, cfg, device)
             ensemble.submodels[i] = new_m.to(device)
             shard_stats.append(st)
         print(f"  retrained {len(shard_stats)} affected sub-model(s)")
@@ -649,14 +756,6 @@ def run_unlearn(cfg: dict, device: torch.device):
         forgotten = sorted({int(targets[i]) for i in forget_indices})
         ovr_specific.update(negative_footprint(
             assignment, forgotten, ensemble.active_classes))
-        # negative-membership MIA needs held-out test samples of the forgotten class
-        test_targets = np.array(test_ds.targets)
-        testk_idx = np.where(np.isin(test_targets, forgotten))[0].tolist()
-        testk_loader = DataLoader(torch.utils.data.Subset(test_ds, testk_idx),
-                                  batch_size=cfg["batch_size"], shuffle=False,
-                                  num_workers=2, pin_memory=True)
-        ovr_specific["neg_membership_mia"] = negative_membership_mia(
-            ensemble, forget_loader, testk_loader, device, cfg["seed"])
 
     # ── Side-by-side table ───────────────────────────────────────────────────
     print(f"\n{'='*68}")
@@ -673,17 +772,6 @@ def run_unlearn(cfg: dict, device: torch.device):
         d = a - b
         print(f"{name:<22} {b*100:>11.2f}%  {a*100:>11.2f}%  "
               f"{('+' if d>=0 else '')}{d*100:>6.2f}%   (ideal: 50%)")
-    if "neg_membership_mia" in ovr_specific:
-        nm = ovr_specific["neg_membership_mia"]
-        print("-" * 68)
-        if nm < 0:
-            print("Neg-membership MIA     : n/a")
-        else:
-            print(f"Neg-membership MIA     : {nm*100:>11.2f}%        "
-                  f"(ideal 50% ⇒ residual negative footprint undetectable)")
-        print(f"Residual neg footprint : {ovr_specific['neg_footprint_frac']*100:.1f}% "
-              f"of forgotten samples still negatives in "
-              f"{ovr_specific['models_touched']}/{ovr_specific['n_active_models']} survivors")
     print("=" * 68)
 
     ovr_train_time = 0.0
@@ -694,7 +782,7 @@ def run_unlearn(cfg: dict, device: torch.device):
 
     _write_results(results_path, {
         "status": "complete", "dataset": dataset, "seed": cfg["seed"],
-        "method": "ovr", "ovr_variant": variant,
+        "method": f"ovr_{variant}", "ovr_variant": variant,
         "forget_strategy": strategy,
         "forget_fraction": cfg.get("forget_fraction") if strategy == "random" else None,
         "forget_class": cfg.get("forget_class") if strategy == "class" else None,
