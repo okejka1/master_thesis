@@ -357,6 +357,64 @@ SPEEDUP_LABELS = {
 }
 
 
+def _draw_at_af_panel(ax, runs, dataset_name, title=None):
+    """Draw A(Dt)/A(Df) lines on ax; returns (method_h, style_h) legend handles."""
+    for method in METHODS:
+        rows  = sorted([r for r in runs if r["method"] == method],
+                       key=lambda r: r["forget_fraction"])
+        fracs = [r["forget_fraction"] * 100 for r in rows]
+        at    = [r["a_test_acc"]   for r in rows]
+        af    = [r["a_forget_acc"] for r in rows]
+        color = COLORS[method]
+        ax.plot(fracs, at, "o-",  color=color, lw=2, ms=7)
+        ax.plot(fracs, af, "o--", color=color, lw=2, ms=7, alpha=0.75)
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Rozmiar $D_f$ [% zbioru treningowego, skala log]", fontsize=11)
+    ax.set_ylabel("Dokładność po oduczeniu [%]", fontsize=11)
+    ax.set_title(title if title is not None else dataset_name, fontsize=12, fontweight="bold")
+    ax.set_ylim(0, 105)
+    ax.grid(True, alpha=0.3, which="both")
+
+    method_h = [mpatches.Patch(color=COLORS[m], label=METHOD_LABELS[m]) for m in METHODS]
+    style_h  = [
+        plt.Line2D([0], [0], color="gray", lw=2, ls="-",  label="$A(D_t)$ — test"),
+        plt.Line2D([0], [0], color="gray", lw=2, ls="--", label="$A(D_f)$ — zapomnienie"),
+    ]
+    return method_h, style_h
+
+
+def plot_at_af_sample(sample_runs_c10, sample_runs_c100):
+    """A(Dt) i A(Df) po oduczeniu vs frakcja zapomnienia.
+
+    Generuje osobną figurę per dataset oraz łączoną figurę dwupanelową.
+    Linia ciągła = A(Dt), linia przerywana = A(Df), kolor per metoda.
+    """
+    # per-dataset figures
+    for dataset_name, runs, suffix in [
+        ("CIFAR-10",  sample_runs_c10,  "cifar10"),
+        ("CIFAR-100", sample_runs_c100, "cifar100"),
+    ]:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        full_title = f"$A(D_t)$ i $A(D_f)$ po oduczeniu próbkowym — {dataset_name}"
+        method_h, style_h = _draw_at_af_panel(ax, runs, dataset_name, title=full_title)
+        ax.legend(handles=method_h + style_h, fontsize=10, loc="best")
+        plt.tight_layout()
+        _save(fig, f"fig_at_af_sample_{suffix}")
+
+    # combined two-panel figure
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    method_h, style_h = _draw_at_af_panel(ax1, sample_runs_c10,  "CIFAR-10")
+    _draw_at_af_panel(ax2, sample_runs_c100, "CIFAR-100")
+    fig.suptitle("$A(D_t)$ i $A(D_f)$ po oduczeniu próbkowym",
+                 fontsize=13, fontweight="bold")
+    fig.legend(handles=method_h + style_h, loc="lower center",
+               ncol=len(method_h) + len(style_h), fontsize=10,
+               bbox_to_anchor=(0.5, 0.0), frameon=True)
+    plt.tight_layout(rect=[0, 0.10, 1, 1])
+    _save(fig, "fig_at_af_sample")
+
+
 def plot_speedup(sample_runs_c10, sample_runs_c100):
     """Przyspieszenie (log-log) vs frakcja zapomnienia — osobno per dataset."""
     for dataset_name, runs, suffix in [
@@ -984,10 +1042,11 @@ def main():
     plot_mia_dumbbell(sr10, sr100, mode="po_50")
     plot_mia_dumbbell(sr10, sr100, mode="po_przed")
 
-    # próbkowe — przyspieszenie, kompromis, czasy
+    # próbkowe — przyspieszenie, kompromis, czasy, luka A(Dt)-A(Df)
     plot_speedup(sr10, sr100)
     plot_tradeoff(sr10, sr100)
     plot_time(sr10, sr100)
+    plot_at_af_sample(sr10, sr100)  # osobno per dataset
 
     # przed/po — próbkowe (osobno per dataset)
     plot_ba_sample(sr10,  "CIFAR-10",  "fig_ba_sample_cifar10")
