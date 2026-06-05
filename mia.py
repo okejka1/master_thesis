@@ -168,10 +168,16 @@ def _train_attacker(
     """
     rng = np.random.RandomState(seed)
 
-    # ── Balance classes: subsample test to match forget size ──────────────────
-    n_forget = len(forget_features)
-    if len(test_features) > n_forget:
-        idx = rng.choice(len(test_features), size=n_forget, replace=False)
+    # ── Balance classes: subsample the larger set to match the smaller ────────
+    # For sample-wise: test >> forget → subsample test (original behaviour).
+    # For class-wise with same-class test set: forget (~5k) > test (~1k) →
+    # subsample forget instead so the attacker sees a balanced 1:1 split.
+    n = min(len(forget_features), len(test_features))
+    if len(forget_features) > n:
+        idx = rng.choice(len(forget_features), size=n, replace=False)
+        forget_features = forget_features[idx]
+    if len(test_features) > n:
+        idx = rng.choice(len(test_features), size=n, replace=False)
         test_features = test_features[idx]
 
     X = np.concatenate([forget_features, test_features]).reshape(-1, 1)

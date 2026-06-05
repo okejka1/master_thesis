@@ -37,6 +37,7 @@ from torch.utils.data import DataLoader, Subset
 
 from models import build_resnet18
 from utils import (
+    class_subset_loader,
     evaluate,
     forget_sample_confidences,
     get_datasets,
@@ -347,6 +348,8 @@ def main():
                                         num_workers=2, pin_memory=True)
     test_loader            = DataLoader(test_ds, batch_size=bs, shuffle=False,
                                         num_workers=2, pin_memory=True)
+    mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], bs)
+                       if cfg["forget_strategy"] == "class" else test_loader)
 
     # ── τ reference loader ─────────────────────────────────────────────────────
     # τ = mean loss on data the original model never trained on.
@@ -382,7 +385,7 @@ def main():
     print(f"{'Test':<15} {orig_test_loss:>8.4f}  {orig_test_acc:>8.2f}%")
 
     print("\nMIA evaluation on original model (5-fold CV):")
-    orig_mia = run_mia_suite(model, forget_eval_loader, test_loader, device,
+    orig_mia = run_mia_suite(model, forget_eval_loader, mia_test_loader, device,
                              label="Original", seed=cfg["seed"])
 
     num_classes = 10 if dataset == "CIFAR10" else 100
@@ -431,7 +434,7 @@ def main():
     new_test_loss,   new_test_acc   = evaluate(model, test_loader,            criterion, device)
 
     print("\nMIA evaluation on unlearned model (5-fold CV):")
-    new_mia = run_mia_suite(model, forget_eval_loader, test_loader, device,
+    new_mia = run_mia_suite(model, forget_eval_loader, mia_test_loader, device,
                             label="Unlearned", seed=cfg["seed"])
 
     print("\nPer-class accuracy & forget-sample confidences (unlearned model)...")

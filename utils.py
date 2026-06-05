@@ -18,7 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from models import build_resnet18
 
@@ -249,6 +249,14 @@ def save_checkpoint(model: nn.Module,
 
     torch.save(payload, path)
     print(f"Saved checkpoint → {path}")
+
+
+def class_subset_loader(dataset, class_id: int, batch_size: int) -> DataLoader:
+    """DataLoader restricted to samples of class_id — used for class-wise MIA
+    so the non-member set contains only same-class test samples, not all classes."""
+    indices = np.where(np.array(dataset.targets) == class_id)[0].tolist()
+    return DataLoader(Subset(dataset, indices), batch_size=batch_size,
+                      shuffle=False, num_workers=2, pin_memory=True)
 
 
 # ── SISA helpers ──────────────────────────────────────────────────────────────

@@ -39,9 +39,9 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from models import build_resnet18
-from utils import (STATS, evaluate, forget_sample_confidences, get_datasets,
-                   get_test_transform, load_checkpoint, per_class_accuracy,
-                   save_checkpoint, set_seed)
+from utils import (STATS, class_subset_loader, evaluate, forget_sample_confidences,
+                   get_datasets, get_test_transform, load_checkpoint,
+                   per_class_accuracy, save_checkpoint, set_seed)
 from mia import run_mia_suite
 
 
@@ -252,6 +252,10 @@ def main():
                                     num_workers=2, pin_memory=True)
     test_loader        = DataLoader(test_ds, batch_size=bs, shuffle=False,
                                     num_workers=2, pin_memory=True)
+    # For class-wise MIA: non-members must be test samples of the SAME class k,
+    # not the full test set (which would measure class identity, not membership).
+    mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], bs)
+                       if cfg["forget_strategy"] == "class" else test_loader)
 
     criterion = nn.CrossEntropyLoss()
 
@@ -271,7 +275,7 @@ def main():
     print(f"{'Test':<15} {orig_test_loss:>8.4f}  {orig_test_acc:>8.2f}%")
 
     print("\nMIA evaluation on original model (5-fold CV):")
-    orig_mia = run_mia_suite(original_model, forget_loader, test_loader, device,
+    orig_mia = run_mia_suite(original_model, forget_loader, mia_test_loader, device,
                              label="Original", seed=cfg["seed"])
 
     print("\nPer-class accuracy & forget-sample confidences (original model)...")
@@ -406,7 +410,7 @@ def main():
     naive_test_loss,   naive_test_acc   = evaluate(naive_model, test_loader,        criterion, device)
 
     print("\nMIA evaluation on naive-retrained model (5-fold CV):")
-    new_mia = run_mia_suite(naive_model, forget_loader, test_loader, device,
+    new_mia = run_mia_suite(naive_model, forget_loader, mia_test_loader, device,
                             label="Naive Retrain", seed=cfg["seed"])
 
     print("\nPer-class accuracy & forget-sample confidences (naive-retrained model)...")

@@ -60,6 +60,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from models import build_resnet18
 from mia import run_mia_suite
 from utils import (
+    class_subset_loader,
     evaluate,
     forget_sample_confidences,
     get_datasets,
@@ -535,12 +536,14 @@ def negative_footprint(assignment: dict, forgotten_classes: list[int],
 # ── Eval bundle (one ensemble snapshot → all metrics) ───────────────────────
 
 def evaluate_snapshot(ensemble, num_classes, device,
-                      test_loader, retain_loader, forget_loader, seed):
+                      test_loader, retain_loader, forget_loader, seed,
+                      mia_test_loader=None):
     ce = nn.CrossEntropyLoss()
     test_loss, test_acc = evaluate(ensemble, test_loader, ce, device)
     ret_loss, ret_acc = evaluate(ensemble, retain_loader, ce, device)
     fgt_loss, fgt_acc = evaluate(ensemble, forget_loader, ce, device)
-    mia = run_mia_suite(ensemble, forget_loader, test_loader, device, seed=seed)
+    _mia_test = mia_test_loader if mia_test_loader is not None else test_loader
+    mia = run_mia_suite(ensemble, forget_loader, _mia_test, device, seed=seed)
     return {
         "test_acc": test_acc, "retain_acc": ret_acc, "forget_acc": fgt_acc,
         "mia_l": mia["mia_l"], "mia_e": mia["mia_e"],
@@ -680,6 +683,8 @@ def run_unlearn(cfg: dict, device: torch.device):
     retain_loader = DataLoader(torch.utils.data.Subset(full_eval, retain_indices),
                                batch_size=cfg["batch_size"], shuffle=False,
                                num_workers=2, pin_memory=True)
+    mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], cfg["batch_size"])
+                       if strategy == "class" else None)
 
     # ── Load original ensemble ──────────────────────────────────────────────
     print("Loading original OVR ensemble...")
@@ -689,7 +694,8 @@ def run_unlearn(cfg: dict, device: torch.device):
 
     print("Evaluating original ensemble (this includes 2× MIA)...")
     before = evaluate_snapshot(ensemble, c, device, test_loader,
-                               retain_loader, forget_loader, cfg["seed"])
+                               retain_loader, forget_loader, cfg["seed"],
+                               mia_test_loader=mia_test_loader)
 
     # ── Unlearn ──────────────────────────────────────────────────────────────
     print(f"\n{'='*65}\n  Unlearning — variant = {variant}\n{'='*65}")
@@ -748,7 +754,8 @@ def run_unlearn(cfg: dict, device: torch.device):
     # ── Evaluate updated ensemble ────────────────────────────────────────────
     print("\nEvaluating updated ensemble...")
     after = evaluate_snapshot(ensemble, c, device, test_loader,
-                              retain_loader, forget_loader, cfg["seed"])
+                              retain_loader, forget_loader, cfg["seed"],
+                              mia_test_loader=mia_test_loader)
 
     # ── OVR-specific metrics ─────────────────────────────────────────────────
     ovr_specific = {}

@@ -57,6 +57,7 @@ from torch.utils.data import DataLoader, Subset
 from models import build_resnet18
 from utils import (
     STATS,
+    class_subset_loader,
     ensemble_evaluate,
     evaluate,
     get_datasets,
@@ -493,6 +494,8 @@ def main():
 
     test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"],
                              shuffle=False, num_workers=2, pin_memory=True)
+    mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], cfg["batch_size"])
+                       if cfg["forget_strategy"] == "class" else test_loader)
 
     # ── Load shard assignments ────────────────────────────────────────────────
     shard_map_path = os.path.join(sisa_dir, "shard_assignments.json")
@@ -569,7 +572,7 @@ def main():
 
     print("\nMIA evaluation on original ensemble (5-fold CV):")
     orig_mia = run_mia_suite_ensemble(
-        original_models, forget_loader, test_loader, device,
+        original_models, forget_loader, mia_test_loader, device,
         aggregation=aggregation, label="Original", seed=cfg["seed"])
 
     print("\nPer-class accuracy & forget-sample confidences (original ensemble)...")
@@ -639,7 +642,7 @@ def main():
 
     print("\nMIA evaluation on updated ensemble (5-fold CV):")
     new_mia = run_mia_suite_ensemble(
-        updated_models, forget_loader, test_loader, device,
+        updated_models, forget_loader, mia_test_loader, device,
         aggregation=aggregation, label="After SISA", seed=cfg["seed"])
 
     print("\nPer-class accuracy & forget-sample confidences (updated ensemble)...")
