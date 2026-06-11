@@ -324,6 +324,154 @@ def run_mia_suite_ensemble(
     return {"mia_l": mia_l, "mia_e": mia_e}
 
 
+# ── Multi-label feature extraction (MUCAC) ───────────────────────────────────
+
+@torch.no_grad()
+def _compute_features_multilabel(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    method: str,
+) -> np.ndarray:
+    """
+    Compute a scalar MIA feature for every sample in `loader`,
+    for a multi-label model (L independent sigmoid outputs).
+
+    method ``"loss"``    — MIA-L: sum of binary CE across all L labels
+                           ℓ(x) = −Σ_i[y_i·log σ_i + (1−y_i)·log(1−σ_i)]
+    method ``"entropy"`` — MIA-E: mean binary entropy across L sigmoids
+                           E(x) = −(1/L)·Σ_i[σ_i·log σ_i + (1−σ_i)·log(1−σ_i)]
+    """
+    model.eval()
+    bce = nn.BCEWithLogitsLoss(reduction="none")
+    features = []
+
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        logits = model(images)                    # (B, L)
+        probs  = logits.sigmoid()                 # (B, L)
+
+        if method == "loss":
+            vals = bce(logits, labels).sum(dim=1) # (B,)  — sum over labels
+        elif method == "entropy":
+            h    = -(probs * torch.log(probs + 1e-12)
+                     + (1 - probs) * torch.log(1 - probs + 1e-12))
+            vals = h.mean(dim=1)                  # (B,)  — mean over labels
+        else:
+            raise ValueError(f"Unknown MIA method: {method!r}")
+
+        features.append(vals.cpu().numpy())
+
+    return np.concatenate(features)
+
+
+def mia_attack_multilabel(
+    model: nn.Module,
+    forget_loader: DataLoader,
+    test_loader: DataLoader,
+    device: torch.device,
+    method: str = "loss",
+    n_splits: int = 5,
+    seed: int = 42,
+) -> float:
+    """
+    MIA against a multi-label model. Feature defined per plan (section 5.2).
+    Returns mean CV accuracy (0–1). Ideal = 0.50.
+    """
+    forget_feats = _compute_features_multilabel(model, forget_loader, device, method)
+    test_feats   = _compute_features_multilabel(model, test_loader,   device, method)
+    return _train_attacker(forget_feats, test_feats, n_splits=n_splits, seed=seed)
+
+
+@torch.no_grad()
+def _compute_features_multilabel_ensemble(
+    models: list,
+    loader: DataLoader,
+    device: torch.device,
+    method: str,
+) -> np.ndarray:
+    """
+    MIA features for a SISA multi-label ensemble.
+    Sigmoid probabilities are averaged across shard models first,
+    then loss / entropy is computed from the averaged distribution.
+    """
+    for m in models:
+        m.eval()
+    features = []
+
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        avg_probs = torch.stack(
+            [m(images).sigmoid() for m in models]
+        ).mean(dim=0)                             # (B, L)
+
+        if method == "loss":
+            # Binary CE from averaged probabilities
+            vals = -(labels * torch.log(avg_probs + 1e-12)
+                     + (1 - labels) * torch.log(1 - avg_probs + 1e-12)
+                     ).sum(dim=1)                 # (B,)
+        elif method == "entropy":
+            h    = -(avg_probs * torch.log(avg_probs + 1e-12)
+                     + (1 - avg_probs) * torch.log(1 - avg_probs + 1e-12))
+            vals = h.mean(dim=1)                  # (B,)
+        else:
+            raise ValueError(f"Unknown MIA method: {method!r}")
+
+        features.append(vals.cpu().numpy())
+
+    return np.concatenate(features)
+
+
+def run_mia_suite_multilabel_ensemble(
+    models: list,
+    forget_loader: DataLoader,
+    test_loader: DataLoader,
+    device: torch.device,
+    label: str = "",
+    n_splits: int = 5,
+    seed: int = 42,
+) -> dict:
+    """
+    MIA-L and MIA-E for a multi-label SISA ensemble.
+    Returns dict with keys ``"mia_l"`` and ``"mia_e"`` (float, 0–1).
+    """
+    mia_l = _train_attacker(
+        _compute_features_multilabel_ensemble(models, forget_loader, device, "loss"),
+        _compute_features_multilabel_ensemble(models, test_loader,   device, "loss"),
+        n_splits=n_splits, seed=seed,
+    )
+    mia_e = _train_attacker(
+        _compute_features_multilabel_ensemble(models, forget_loader, device, "entropy"),
+        _compute_features_multilabel_ensemble(models, test_loader,   device, "entropy"),
+        n_splits=n_splits, seed=seed,
+    )
+    prefix = f"[{label}] " if label else ""
+    _print_mia(prefix, mia_l, mia_e)
+    return {"mia_l": mia_l, "mia_e": mia_e}
+
+
+def run_mia_suite_multilabel(
+    model: nn.Module,
+    forget_loader: DataLoader,
+    test_loader: DataLoader,
+    device: torch.device,
+    label: str = "",
+    n_splits: int = 5,
+    seed: int = 42,
+) -> dict:
+    """
+    Compute both MIA-L and MIA-E for a multi-label model.
+    Returns dict with keys ``"mia_l"`` and ``"mia_e"`` (float, 0–1).
+    """
+    mia_l = mia_attack_multilabel(model, forget_loader, test_loader, device,
+                                  method="loss",    n_splits=n_splits, seed=seed)
+    mia_e = mia_attack_multilabel(model, forget_loader, test_loader, device,
+                                  method="entropy", n_splits=n_splits, seed=seed)
+    prefix = f"[{label}] " if label else ""
+    _print_mia(prefix, mia_l, mia_e)
+    return {"mia_l": mia_l, "mia_e": mia_e}
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _print_mia(prefix: str, mia_l: float, mia_e: float) -> None:

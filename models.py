@@ -3,6 +3,7 @@ Model definitions for the Machine Unlearning experiments.
 
 Currently supports:
     - ResNet-18 adapted for CIFAR (32×32) inputs.
+    - ResNet-18 multi-label head for MUCAC (128×128 CelebA crops).
 
 """
 
@@ -35,4 +36,22 @@ def build_resnet18(num_classes: int, cifar_head: bool = True) -> nn.Module:
         model.maxpool = nn.Identity()
 
     model.fc = nn.Linear(model.fc.in_features, num_classes)
+    return model
+
+
+def build_resnet18_multilabel(num_labels: int = 3) -> nn.Module:
+    """
+    ResNet-18 for multi-label classification (MUCAC: Male/Young/Smiling).
+
+    Input : 128×128 RGB images (standard ImageNet stem — no CIFAR hack).
+    Output: raw logits of shape (B, num_labels).
+    Loss  : BCEWithLogitsLoss — do NOT apply sigmoid inside the model.
+
+    Parameters
+    ----------
+    num_labels : int
+        Number of binary labels (default 3 for MUCAC).
+    """
+    model = models.resnet18(weights=None)
+    model.fc = nn.Linear(model.fc.in_features, num_labels)
     return model

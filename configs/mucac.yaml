@@ -1,0 +1,38 @@
+# ── Dataset ───────────────────────────────────────────────────────────────────
+dataset: MUCAC
+data_root: ./data           # katalog zawierający mucac_dataset/
+num_labels: 3               # Male, Young, Smiling
+
+checkpoint_dir: ./checkpoints/mucac
+
+# ── Training hyper-parameters ─────────────────────────────────────────────────
+batch_size: 64              # 128×128 → mniejszy batch niż CIFAR
+num_epochs: 10              # 10 = 5 slices × 2 epochs/slice (SISA alignment)
+lr: 1.0e-3                  # Adam
+weight_decay: 1.0e-4
+lr_milestones: [7, 9]       # ×0.1 na epoce 7 i 9
+lr_gamma: 0.1
+seed: 42
+
+num_workers: 4
+
+# ── Unlearning (instance-level) ───────────────────────────────────────────────
+# forget_identity: ID tożsamości do zapomnienia (kolumna identity w CSV)
+forget_identity: null       # null → nie definiuje D_f; ustawiane per-run
+
+# ── SISA ─────────────────────────────────────────────────────────────────────
+sisa_shards: 5
+sisa_slices: 5
+sisa_aggregation: soft_vote
+
+# ── OvR ──────────────────────────────────────────────────────────────────────
+# W multi-label OvR jest natywny — każdy submodel to jeden atrybut binarny.
+ovr_slices: 5
+ovr_epochs: null            # null → num_epochs
+
+# ── ∇τ ───────────────────────────────────────────────────────────────────────
+grad_tau_forget_epochs: 1
+grad_tau_alpha: null        # null → auto
+grad_tau_lr: 1.0e-4
+grad_tau_weight_decay: 1.0e-4
+grad_tau_recompute_val_every: 1
