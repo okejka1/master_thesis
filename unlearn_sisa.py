@@ -69,7 +69,7 @@ from utils import (
 from mia import run_mia_suite_ensemble
 
 
-# ── Config helpers ────────────────────────────────────────────────────────────
+# config
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -132,7 +132,7 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Forget/retain helpers ─────────────────────────────────────────────────────
+# forget / retain helpers
 
 def build_forget_indices(train_dataset,
                          strategy: str,
@@ -157,7 +157,7 @@ def build_forget_indices(train_dataset,
     return forget_indices
 
 
-# ── Training loop ─────────────────────────────────────────────────────────────
+# training loop
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -178,7 +178,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total, 100.0 * correct / total
 
 
-# ── Slice logic ───────────────────────────────────────────────────────────────
+# slice logic
 
 def slice_shard_indices(shard_indices: list[int],
                         num_slices: int) -> list[list[int]]:
@@ -209,7 +209,7 @@ def find_earliest_affected_slice(raw_slices: list[list[int]],
     return -1
 
 
-# ── Shard retraining ──────────────────────────────────────────────────────────
+# shard retraining
 
 def retrain_shard(shard_id: int,
                   shard_indices: list[int],
@@ -241,15 +241,12 @@ def retrain_shard(shard_id: int,
     shard_dir = os.path.join(cfg["checkpoint_dir"],
                              f"sisa_{ds_tag}", f"shard_{shard_id}")
 
-    # Compute raw slices
     raw_slices = slice_shard_indices(shard_indices, num_slices)
 
-    # Find earliest affected slice
     affected_slice = find_earliest_affected_slice(raw_slices, forget_set)
     if affected_slice == -1:
         # This shard has no forget data — should not happen if called correctly
         print(f"  Shard {shard_id}: no forget data found — skipping")
-        # Load final model
         final_ckpt = os.path.join(shard_dir, f"slice_{num_slices - 1:02d}.pth")
         ckpt = torch.load(final_ckpt, map_location=device)
         model = build_resnet18(num_classes).to(device)
@@ -258,7 +255,6 @@ def retrain_shard(shard_id: int,
 
     print(f"\n  Shard {shard_id}: earliest affected slice = {affected_slice}")
 
-    # Load checkpoint from the slice BEFORE the affected one
     if affected_slice == 0:
         print(f"  Shard {shard_id}: slice 0 affected → retraining from scratch")
         model = build_resnet18(num_classes).to(device)
@@ -308,7 +304,6 @@ def retrain_shard(shard_id: int,
     t0 = time.time()
 
     for r in slices_to_retrain:
-        # Add retain indices from slice r
         retain_in_slice = [i for i in raw_slices[r] if i not in forget_set]
         base_indices.extend(retain_in_slice)
 
@@ -369,7 +364,7 @@ def retrain_shard(shard_id: int,
     return model, stats
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# entry point
 
 def _write_results(path: str, payload: dict) -> None:
     """Atomically write results JSON (write to tmp then rename)."""
@@ -379,7 +374,7 @@ def _write_results(path: str, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-# ── Ensemble evaluation helpers ───────────────────────────────────────────────
+# ensemble eval helpers
 
 def ensemble_per_class_accuracy(models: list,
                                 loader,
@@ -483,7 +478,6 @@ def main():
     print(f"  Results out     : {_output_dir}")
     print(f"{'='*65}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     full_train, test_ds = get_datasets(dataset, cfg["data_root"])
 
     DatasetClass = (torchvision.datasets.CIFAR10 if dataset == "CIFAR10"
@@ -497,7 +491,6 @@ def main():
     mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], cfg["batch_size"])
                        if cfg["forget_strategy"] == "class" else test_loader)
 
-    # ── Load shard assignments ────────────────────────────────────────────────
     shard_map_path = os.path.join(sisa_dir, "shard_assignments.json")
     if not os.path.exists(shard_map_path):
         raise FileNotFoundError(
@@ -511,7 +504,6 @@ def main():
     print(f"  {num_shards} shards, sizes: "
           f"{[len(s) for s in shards]}\n")
 
-    # ── Build forget set ──────────────────────────────────────────────────────
     forget_indices = build_forget_indices(
         full_train,
         strategy=cfg["forget_strategy"],
@@ -526,7 +518,6 @@ def main():
     print(f"Retain set   : {len(retain_indices):,} samples")
     print(f"Test set     : {len(test_ds):,} samples\n")
 
-    # ── Load original ensemble ────────────────────────────────────────────────
     print("Loading original SISA ensemble...")
     criterion     = nn.CrossEntropyLoss()
     original_models = []
@@ -542,13 +533,11 @@ def main():
         original_models.append(model)
         print(f"  Loaded shard {s} from {final_ckpt}")
 
-    # Evaluate original ensemble
     if aggregation == "soft_vote":
         ens_criterion = nn.NLLLoss()
     else:
         ens_criterion = criterion
 
-    # Data loaders for evaluation
     forget_loader = DataLoader(Subset(full_eval, forget_indices),
                                batch_size=cfg["batch_size"], shuffle=False,
                                num_workers=2, pin_memory=True)
@@ -585,7 +574,6 @@ def main():
     orig_forget_conf      = forget_sample_confidences(
         original_models, forget_loader, device, aggregation)
 
-    # ── Identify affected shards ──────────────────────────────────────────────
     affected_shards = []
     for s, shard_idx in enumerate(shards):
         overlap = forget_set.intersection(shard_idx)
@@ -598,7 +586,6 @@ def main():
     print(f"\n  Affected shards  : {affected_shards}")
     print(f"  Unaffected shards: {unaffected_shards}")
 
-    # ── Retrain affected shards ───────────────────────────────────────────────
     print(f"\n{'='*65}")
     print(f"  Retraining {len(affected_shards)} affected shard(s)...")
     print(f"{'='*65}")
@@ -622,7 +609,7 @@ def main():
 
     unlearn_time = time.time() - unlearn_start
 
-    print(f"\n  SISA unlearning completed in {unlearn_time:.1f}s")
+    print(f"  SISA unlearning completed in {unlearn_time:.1f}s")
     for stat in all_stats:
         if stat.get("retrained"):
             print(f"    Shard {stat['shard_id']}: "
@@ -631,7 +618,6 @@ def main():
                   f"{stat['epochs_retrained']} epochs, "
                   f"{stat['retrain_time_s']:.1f}s")
 
-    # ── Evaluate updated ensemble ─────────────────────────────────────────────
     print(f"\nEvaluating updated ensemble...")
     new_test_loss,   new_test_acc   = ensemble_evaluate(
         updated_models, test_loader, ens_criterion, device, aggregation)
@@ -655,7 +641,6 @@ def main():
     new_forget_conf      = forget_sample_confidences(
         updated_models, forget_loader, device, aggregation)
 
-    # ── Side-by-side comparison ───────────────────────────────────────────────
     print(f"\n{'='*68}")
     print(f"{'Metric':<22} {'Before SISA':>12}  {'After SISA':>12}  {'\u0394':>6}")
     print(f"{'='*68}")
@@ -690,14 +675,13 @@ def main():
             sisa_train_time = json.load(f).get("total_time_s", 0)
 
     print(f"{'='*68}")
-    print(f"\n  Ensemble training time : {sisa_train_time:.1f}s")
+    print(f"  Ensemble training time : {sisa_train_time:.1f}s")
     print(f"  Unlearning time        : {unlearn_time:.1f}s")
     print(f"  Shards retrained       : {len(affected_shards)}/{num_shards}")
     total_retrain_epochs = sum(
         s.get("epochs_retrained", 0) for s in all_stats)
     print(f"  Total retrain epochs   : {total_retrain_epochs}")
 
-    # Save unlearning results
     _write_results(_results_path, {
         "status":            "complete",
         "dataset":           dataset,

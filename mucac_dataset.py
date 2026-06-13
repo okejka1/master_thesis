@@ -81,8 +81,6 @@ class MuCACDataset(Dataset):
         label = self.labels[idx]
         return img, label
 
-    # ── Forget / Retain subsets ───────────────────────────────────────────────
-
     def forget_indices(self, identity: int) -> list[int]:
         """Indices belonging to the given identity (D_f)."""
         return self.df.index[self.df["identity"] == identity].tolist()
@@ -92,7 +90,7 @@ class MuCACDataset(Dataset):
         return self.df.index[self.df["identity"] != identity].tolist()
 
 
-# ── Convenience loader builders ───────────────────────────────────────────────
+# loaders
 
 def get_mucac_loaders(data_root: str,
                       batch_size: int = 64,
@@ -149,7 +147,7 @@ def get_forget_retain_loaders(train_ds: MuCACDataset,
     return forget_loader, retain_loader
 
 
-# ── Identity-based sharding (for SISA) ───────────────────────────────────────
+# sisa sharding
 
 def identity_shard(df, num_shards: int, seed: int) -> list[list[int]]:
     """
@@ -174,9 +172,9 @@ def identity_shard(df, num_shards: int, seed: int) -> list[list[int]]:
     return shards
 
 
-# ── Ensemble evaluation (for SISA) ───────────────────────────────────────────
-
 @torch.no_grad()
+# ensemble evaluation
+
 def ensemble_evaluate_multilabel(models: list, loader: DataLoader,
                                   device: torch.device) -> dict[str, float]:
     """
@@ -233,9 +231,9 @@ def ensemble_evaluate_multilabel(models: list, loader: DataLoader,
     return result
 
 
-# ── Per-label evaluation ──────────────────────────────────────────────────────
-
 @torch.no_grad()
+# per-label evaluation
+
 def evaluate_multilabel(model, loader, device) -> dict[str, float]:
     """
     Per-label metrics: accuracy, F1, balanced accuracy.

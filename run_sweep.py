@@ -73,11 +73,10 @@ import subprocess
 import sys
 import time
 
-# ── Repo root (script lives next to train.py etc.) ────────────────────────────
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-# ── Crash-safe sentinel ───────────────────────────────────────────────────────
+# helpers
 
 def is_complete(json_path: str) -> bool:
     """True only when the JSON exists AND contains status='complete'."""
@@ -99,7 +98,7 @@ def _get_status(json_path: str) -> str:
         return "corrupt"
 
 
-# ── Subprocess runner ─────────────────────────────────────────────────────────
+# subprocess runner
 
 def run_script(script_args: list, sentinel: str | None = None, label: str = "") -> bool:
     """
@@ -121,7 +120,7 @@ def run_script(script_args: list, sentinel: str | None = None, label: str = "") 
     return rc == 0
 
 
-# ── Directory helpers ─────────────────────────────────────────────────────────
+# directory layout
 
 def base_dir(ckpt_root: str, seed: int, dataset: str) -> str:
     return os.path.join(ckpt_root, f"seed_{seed}", dataset, "base")
@@ -172,7 +171,7 @@ def class_key(cls: int) -> str:
     return f"class_{cls}"
 
 
-# ── Result JSON path per method ───────────────────────────────────────────────
+# result paths
 
 def result_json(ckpt_root: str, seed: int, dataset: str,
                 sweep: str, method: str, key: str) -> str:
@@ -186,7 +185,7 @@ def result_json(ckpt_root: str, seed: int, dataset: str,
     raise ValueError(f"Unknown method: {method!r}")
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+# training
 
 def maybe_train_base(ckpt_root: str, seed: int, dataset: str,
                      data_root: str) -> None:
@@ -242,7 +241,7 @@ def maybe_train_ovr(ckpt_root: str, seed: int, dataset: str,
     )
 
 
-# ── Sample-wise sweep ─────────────────────────────────────────────────────────
+# sample-wise sweep
 
 def run_sample_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
                      fractions: list[float], methods: list[str],
@@ -323,7 +322,7 @@ def run_sample_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
             )
 
 
-# ── Class-wise sweep ──────────────────────────────────────────────────────────
+# class-wise sweep
 
 def run_class_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
                     classes: list[int], methods: list[str],
@@ -411,7 +410,7 @@ def run_class_sweep(ckpt_root: str, seed: int, dataset: str, data_root: str,
                 )
 
 
-# ── Collect ───────────────────────────────────────────────────────────────────
+# collect results
 
 def collect(ckpt_root: str, seed: int, dataset: str,
             fractions: list[float], classes: list[int],
@@ -473,7 +472,7 @@ def collect(ckpt_root: str, seed: int, dataset: str,
                       f"status={m['status']}")
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# cli
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -525,12 +524,11 @@ def parse_args():
     return p.parse_args()
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# main
 
 def main():
     args = parse_args()
 
-    # Resolve active methods
     methods = []
     if not args.no_naive:    methods.append("naive")
     if not args.no_grad_tau: methods.append("grad_tau")
@@ -540,11 +538,9 @@ def main():
         print("ERROR: all methods disabled — nothing to run.")
         sys.exit(1)
 
-    # Mode flags
     do_sample = args.mode in ("sample", "both")
     do_class  = args.mode in ("class",  "both")
 
-    # Default classes
     n_classes = 100 if args.dataset == "cifar100" else 10
     classes   = args.classes if args.classes is not None else list(range(n_classes))
 
@@ -571,14 +567,12 @@ def main():
         print(f"{'*'*65}")
 
         if not args.collect_only:
-            # ── Training ──────────────────────────────────────────────────────
             maybe_train_base(ckpt_root, seed, args.dataset, data_root)
             if "sisa" in methods:
                 maybe_train_sisa(ckpt_root, seed, args.dataset, data_root)
             if "ovr" in methods:
                 maybe_train_ovr(ckpt_root, seed, args.dataset, data_root)
 
-            # ── Unlearning sweeps ─────────────────────────────────────────────
             if do_sample:
                 run_sample_sweep(ckpt_root, seed, args.dataset, data_root,
                                  args.fractions, methods,
@@ -589,7 +583,6 @@ def main():
                                 ovr_class_variants=args.ovr_class_variants,
                                 save_unlearned_ckpts=args.save_unlearned_ckpts)
 
-        # ── Collect ───────────────────────────────────────────────────────────
         print(f"\n{'─'*62}")
         print(f"  Collecting results  seed={seed}  {args.dataset}")
         print(f"{'─'*62}")

@@ -50,7 +50,7 @@ from utils import (
 from mia import run_mia_suite
 
 
-# ── Config helpers ────────────────────────────────────────────────────────────
+# config
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -72,8 +72,6 @@ def parse_args():
     parser.add_argument("--forget-class",    type=int,   default=None)
     parser.add_argument("--batch-size",      type=int,   default=None)
     parser.add_argument("--seed",            type=int,   default=None)
-    
-    # ∇τ specific CLI overrides
     parser.add_argument("--grad-tau-epochs", type=int, default=None)
     parser.add_argument("--grad-tau-alpha", type=float, default=None)
     parser.add_argument("--grad-tau-lr", type=float, default=None)
@@ -101,7 +99,7 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Forget/retain/val split ───────────────────────────────────────────────────
+# splits
 
 def build_indices(train_dataset,
                   strategy: str,
@@ -116,7 +114,6 @@ def build_indices(train_dataset,
     all_indices = list(range(len(train_dataset)))
     rng = random.Random(seed)
 
-    # 1. Build forget set
     if strategy == "random":
         forget_indices = rng.sample(all_indices,
                                     int(len(all_indices) * forget_fraction))
@@ -128,8 +125,7 @@ def build_indices(train_dataset,
 
     forget_set = set(forget_indices)
     retain_indices = [i for i in all_indices if i not in forget_set]
-    
-    # 2. Split retain into retain_train and val
+
     num_val = int(len(retain_indices) * val_fraction)
     val_indices = rng.sample(retain_indices, num_val)
     val_set = set(val_indices)
@@ -154,7 +150,7 @@ def compute_mean_loss(model, loader, criterion, device) -> float:
     return total_loss / total_samples
 
 
-# ── ∇τ Training Loop ──────────────────────────────────────────────────────────
+# unlearning loop
 
 def grad_tau_unlearn(model, forget_loader, retain_loader, ref_loader,
                      alpha_init: float, forget_epochs: int,
@@ -200,7 +196,6 @@ def grad_tau_unlearn(model, forget_loader, retain_loader, ref_loader,
     for epoch in range(1, forget_epochs + 1):
         t0 = time.time()
 
-        # Recompute τ (L_Dv) from the reference loader
         if (epoch - 1) % recompute_val_every == 0:
             tau = compute_mean_loss(model, ref_loader, criterion_reduce, device)
             model.train()
@@ -252,7 +247,7 @@ def grad_tau_unlearn(model, forget_loader, retain_loader, ref_loader,
     return model
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# entry point
 
 def _write_results(path: str, payload: dict) -> None:
     """Atomically write results JSON (write to tmp then rename)."""
@@ -280,7 +275,6 @@ def main():
 
     results_path = os.path.join(cfg["checkpoint_dir"], f"grad_tau_{ds_tag}_results.json")
 
-    # ── Resume logic ───────────────────────────────────────────────────────────
     if os.path.exists(results_path):
         try:
             with open(results_path) as _f:
@@ -303,7 +297,6 @@ def main():
     print(f"  Checkpoints     : {cfg['checkpoint_dir']}")
     print(f"{'='*65}\n")
 
-    # ── Data ───────────────────────────────────────────────────────────────────
     # full_train   — augmented transforms   → used for unlearning (retain data)
     # full_eval    — no augmentation        → used for evaluation/forget ascent
     full_train, test_ds = get_datasets(dataset, cfg["data_root"])
@@ -329,7 +322,6 @@ def main():
 
     bs = cfg["batch_size"]
 
-    # ── Unlearning loaders ─────────────────────────────────────────────────────
     # forget_train_loader: EVAL transforms — must match τ scale.
     #   (Using augmented images here inflates L_Df above τ, zeroing the ReLU.)
     forget_train_loader = DataLoader(Subset(full_eval, forget_indices),
@@ -339,7 +331,6 @@ def main():
                                      batch_size=bs, shuffle=True,
                                      num_workers=2, pin_memory=True, drop_last=True)
 
-    # ── Evaluation loaders ─────────────────────────────────────────────────────
     forget_eval_loader     = DataLoader(Subset(full_eval, forget_indices),
                                         batch_size=bs, shuffle=False,
                                         num_workers=2, pin_memory=True)
@@ -351,7 +342,6 @@ def main():
     mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], bs)
                        if cfg["forget_strategy"] == "class" else test_loader)
 
-    # ── τ reference loader ─────────────────────────────────────────────────────
     # τ = mean loss on data the original model never trained on.
     # We use a fixed 1 000-sample subset of the test set so that:
     #   • the full 10 000-sample test_loader is untouched for fair evaluation
@@ -365,7 +355,6 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
 
-    # ── Baseline: evaluate original model ──────────────────────────────────────
     if not os.path.exists(original_ckpt):
         raise FileNotFoundError(f"Original checkpoint not found at {original_ckpt}. "
                                 "Run train.py first.")
@@ -395,7 +384,6 @@ def main():
     orig_per_class_forget = per_class_accuracy(model, forget_eval_loader,     num_classes, device).tolist()
     orig_forget_conf      = forget_sample_confidences(model, forget_eval_loader, device)
 
-    # ── ∇τ Unlearning ──────────────────────────────────────────────────────────
     unlearn_start = time.time()
 
     forget_epochs       = cfg.get("grad_tau_forget_epochs", 10)
@@ -427,7 +415,6 @@ def main():
     unlearn_time = time.time() - unlearn_start
     print(f"\nUnlearning complete in {unlearn_time:.1f} seconds.\n")
 
-    # ── Evaluate unlearned model ───────────────────────────────────────────────
     print("Evaluating unlearned model on all splits...")
     new_retain_loss, new_retain_acc = evaluate(model, all_retain_eval_loader, criterion, device)
     new_forget_loss, new_forget_acc = evaluate(model, forget_eval_loader,     criterion, device)
@@ -443,7 +430,6 @@ def main():
     new_per_class_forget = per_class_accuracy(model, forget_eval_loader,     num_classes, device).tolist()
     new_forget_conf      = forget_sample_confidences(model, forget_eval_loader, device)
 
-    # ── Side-by-side comparison ────────────────────────────────────────────────
     print(f"\n{'='*68}")
     print(f"{'Metric':<22} {'Original':>12}  {'∇τ Unlearned':>14}  {'Δ':>6}")
     print(f"{'='*68}")
@@ -471,7 +457,6 @@ def main():
 
     print(f"{'='*68}")
 
-    # ── Save checkpoint & results ──────────────────────────────────────────────
     out_ckpt = os.path.join(cfg["checkpoint_dir"], f"resnet18_{ds_tag}_grad_tau_unlearn.pth")
     save_checkpoint(
         model, out_ckpt,

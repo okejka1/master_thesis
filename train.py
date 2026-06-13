@@ -33,7 +33,7 @@ from models import build_resnet18
 from utils import evaluate, get_datasets, per_class_accuracy, save_checkpoint, set_seed
 
 
-# ── Config loading ────────────────────────────────────────────────────────────
+# config
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -46,7 +46,6 @@ def parse_args():
     )
     parser.add_argument("--config", required=True,
                         help="Path to YAML config file (e.g. configs/cifar10.yaml).")
-    # Optional CLI overrides — all fall back to YAML values if not specified
     parser.add_argument("--checkpoint-dir", default=None,
                         help="Where to save checkpoints. "
                              "Useful for pointing at Google Drive on Colab.")
@@ -74,7 +73,7 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Training loop ─────────────────────────────────────────────────────────────
+# training
 
 def train_one_epoch(model: nn.Module,
                     loader: DataLoader,
@@ -107,13 +106,12 @@ def train_one_epoch(model: nn.Module,
     return total_loss / total, 100.0 * correct / total
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# entry point
 
 def main():
     args   = parse_args()
     cfg    = merge(load_config(args.config), args)
 
-    # ── Setup ──────────────────────────────────────────────────────────────────
     set_seed(cfg["seed"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(cfg["checkpoint_dir"], exist_ok=True)
@@ -131,7 +129,6 @@ def main():
     print(f"  Checkpoints : {cfg['checkpoint_dir']}")
     print(f"{'='*60}\n")
 
-    # ── Data ───────────────────────────────────────────────────────────────────
     train_ds, test_ds = get_datasets(dataset, cfg["data_root"])
     train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"],
                               shuffle=True,  num_workers=2, pin_memory=True)
@@ -142,7 +139,6 @@ def main():
           f"Test samples : {len(test_ds):,} | "
           f"Batches/epoch: {len(train_loader)}\n")
 
-    # ── Model + optimiser ──────────────────────────────────────────────────────
     model     = build_resnet18(num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(),
@@ -157,14 +153,12 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}\n")
 
-    # ── Checkpoint paths ───────────────────────────────────────────────────────
     ds_tag    = dataset.lower()
     best_ckpt = os.path.join(cfg["checkpoint_dir"],
                              f"resnet18_{ds_tag}_best.pth")
     final_ckpt = os.path.join(cfg["checkpoint_dir"],
                               f"resnet18_{ds_tag}_final.pth")
 
-    # ── Training ───────────────────────────────────────────────────────────────
     start_time = time.time()
     best_acc = 0.0
     history  = {"train_loss": [], "train_acc": [],

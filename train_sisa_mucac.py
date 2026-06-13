@@ -34,7 +34,8 @@ from mucac_dataset import (
 from utils import set_seed
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
+# config
 
 def load_config(path):
     with open(path) as f:
@@ -70,7 +71,8 @@ def merge(cfg, args):
     return cfg
 
 
-# ── Slice helpers ─────────────────────────────────────────────────────────────
+
+# slice helpers
 
 def make_cumulative_slices(shard_indices: list[int],
                             num_slices: int) -> list[list[int]]:
@@ -89,7 +91,8 @@ def raw_slices(shard_indices: list[int], num_slices: int) -> list[list[int]]:
     return [c.tolist() for c in np.array_split(arr, num_slices)]
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+
+# training
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -112,6 +115,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total, float(correct.sum() / (total * len(LABEL_COLS)) * 100)
 
 
+# checkpointing
+
 def save_shard_ckpt(model, optimizer, path, epoch, shard_id, slice_id, cfg):
     torch.save({
         "epoch":       epoch,
@@ -125,6 +130,8 @@ def save_shard_ckpt(model, optimizer, path, epoch, shard_id, slice_id, cfg):
         "config":      cfg,
     }, path)
 
+
+# shard training
 
 def train_shard(shard_id, shard_indices, train_ds, test_loader, cfg, device):
     num_slices       = cfg["sisa_slices"]
@@ -194,7 +201,8 @@ def train_shard(shard_id, shard_indices, train_ds, test_loader, cfg, device):
     return model
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+
+# entry point
 
 def main():
     args = parse_args()
@@ -218,7 +226,6 @@ def main():
     print(f"  Out         : {sisa_dir}")
     print(f"{'='*62}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     base = os.path.join(cfg["data_root"], "mucac_dataset")
     train_ds = MuCACDataset(base + "/train.csv", base + "/train",
                             transform=_train_transform())
@@ -228,7 +235,6 @@ def main():
                              shuffle=False, num_workers=cfg["num_workers"],
                              pin_memory=True)
 
-    # ── Sharding ──────────────────────────────────────────────────────────────
     shard_map_path = os.path.join(sisa_dir, "shard_assignments.json")
     if os.path.exists(shard_map_path):
         with open(shard_map_path) as f:
@@ -244,7 +250,6 @@ def main():
         n_ids = train_ds.df.loc[shard_idx, "identity"].nunique()
         print(f"  Shard {s}: {len(shard_idx):,} samples  ({n_ids} identities)")
 
-    # ── Train each shard ──────────────────────────────────────────────────────
     t_start      = time.time()
     shard_models = []
 
@@ -257,7 +262,6 @@ def main():
     print(f"\n{'='*62}")
     print(f"  All {num_shards} shards done in {total_time:.0f}s")
 
-    # ── Ensemble evaluation ───────────────────────────────────────────────────
     metrics = ensemble_evaluate_multilabel(shard_models, test_loader, device)
     print(f"\n  Ensemble test:  acc={metrics['mean_acc']:.1f}%  "
           f"f1={metrics['mean_f1']:.1f}%  bal={metrics['mean_bal_acc']:.1f}%")

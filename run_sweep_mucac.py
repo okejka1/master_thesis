@@ -52,7 +52,8 @@ import time
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# helpers
 
 def is_complete(json_path: str) -> bool:
     if not os.path.exists(json_path):
@@ -73,6 +74,8 @@ def _get_status(json_path: str) -> str:
         return "corrupt"
 
 
+# subprocess runner
+
 def run_script(script_args: list, sentinel: str | None = None,
                label: str = "") -> bool:
     tag = f"[{label}]" if label else ""
@@ -88,6 +91,8 @@ def run_script(script_args: list, sentinel: str | None = None,
     return rc == 0
 
 
+# directory layout
+
 def frac_key(frac: float) -> str:
     """0.001 → frac_0p1pct,  0.01 → frac_01pct,  0.10 → frac_10pct"""
     pct = round(frac * 100, 6)
@@ -97,7 +102,6 @@ def frac_key(frac: float) -> str:
     return f"frac_{s}pct"
 
 
-# ── Directory layout (mirrors run_sweep.py) ───────────────────────────────────
 
 def base_dir(ckpt_root: str, seed: int) -> str:
     return os.path.join(ckpt_root, f"seed_{seed}", "mucac", "base")
@@ -118,7 +122,8 @@ def result_json(ckpt_root: str, seed: int, method: str, frac: float) -> str:
     return os.path.join(method_dir(ckpt_root, seed, method, frac), filename)
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+
+# training
 
 def maybe_train_sisa(ckpt_root: str, seed: int, data_root: str) -> None:
     sd       = sisa_base_dir(ckpt_root, seed)
@@ -154,7 +159,8 @@ def maybe_train_base(ckpt_root: str, seed: int, data_root: str) -> None:
     )
 
 
-# ── Unlearning sweeps ─────────────────────────────────────────────────────────
+
+# sweeps
 
 def run_sisa_sweep(ckpt_root: str, seed: int, data_root: str,
                    fractions: list[float]) -> None:
@@ -220,7 +226,8 @@ def run_grad_tau_sweep(ckpt_root: str, seed: int, data_root: str,
         )
 
 
-# ── Collect ───────────────────────────────────────────────────────────────────
+
+# collect results
 
 def collect(ckpt_root: str, seeds: list[int],
             fractions: list[float], methods: list[str]) -> None:
@@ -258,7 +265,8 @@ def collect(ckpt_root: str, seeds: list[int],
                   f"frac={m['frac']}  status={m['status']}")
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+
+# cli
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -283,6 +291,8 @@ def parse_args():
                    help="Only collect results, skip training/unlearning.")
     return p.parse_args()
 
+
+# main
 
 def main():
     args      = parse_args()

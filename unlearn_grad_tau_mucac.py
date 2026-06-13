@@ -44,7 +44,8 @@ from unlearn_naive_mucac import build_forget_retain_indices, _flatten, _print_sp
 from utils import set_seed
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
+# config
 
 def load_config(path: str) -> dict:
     with open(path) as f:
@@ -83,7 +84,8 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Model helpers ─────────────────────────────────────────────────────────────
+
+# helpers
 
 def _load_model(path: str, device: torch.device):
     ckpt  = torch.load(path, map_location=device, weights_only=False)
@@ -113,9 +115,10 @@ def _write_results(path: str, payload: dict):
     os.replace(tmp, path)
 
 
-# ── τ helper ──────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
+# unlearning loop
+
 def _mean_loss(model, loader, criterion, device) -> float:
     model.eval()
     total_loss, total_n = 0.0, 0
@@ -127,7 +130,8 @@ def _mean_loss(model, loader, criterion, device) -> float:
     return total_loss / total_n
 
 
-# ── ∇τ core ───────────────────────────────────────────────────────────────────
+
+# grad tau unlearn
 
 def grad_tau_unlearn(model,
                      forget_loader: DataLoader,
@@ -211,7 +215,8 @@ def grad_tau_unlearn(model,
     return model
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+
+# entry point
 
 def main():
     args = parse_args()
@@ -246,7 +251,6 @@ def main():
     print(f"  Output dir      : {cfg['checkpoint_dir']}")
     print(f"{'='*62}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     base = os.path.join(cfg["data_root"], "mucac_dataset")
 
     train_aug  = MuCACDataset(base + "/train.csv", base + "/train",
@@ -290,7 +294,6 @@ def main():
     ref_loader = DataLoader(Subset(test_ds, _ref_idx), batch_size=bs,
                             shuffle=False, num_workers=nw, pin_memory=True)
 
-    # ── Baseline eval ─────────────────────────────────────────────────────────
     print("Loading baseline model...")
     model = _load_model(base_ckpt, device)
 
@@ -306,7 +309,6 @@ def main():
     orig_mia = run_mia_suite_multilabel(model, forget_eval_loader, test_loader,
                                         device, label="Baseline", seed=cfg["seed"])
 
-    # ── ∇τ hyperparams ────────────────────────────────────────────────────────
     forget_epochs       = cfg.get("grad_tau_forget_epochs", 1)
     lr                  = cfg.get("grad_tau_lr",            1e-4)
     weight_decay        = cfg.get("grad_tau_weight_decay",  1e-4)
@@ -320,7 +322,6 @@ def main():
     print(f"\nα₀ = {alpha_init:.4f}  "
           f"({'config' if isinstance(_cfg_alpha, (int, float)) else 'auto'})")
 
-    # ── ∇τ unlearning ─────────────────────────────────────────────────────────
     t0 = time.time()
     model = grad_tau_unlearn(
         model,
@@ -337,7 +338,6 @@ def main():
     unlearn_time = time.time() - t0
     print(f"\nUnlearning done in {unlearn_time:.0f}s")
 
-    # ── Eval after unlearning ─────────────────────────────────────────────────
     print("\nMetrics after ∇τ:")
     new_test_m   = evaluate_multilabel(model, test_loader,        device)
     new_retain_m = evaluate_multilabel(model, retain_eval_loader, device)
@@ -350,7 +350,6 @@ def main():
     new_mia = run_mia_suite_multilabel(model, forget_eval_loader, test_loader,
                                        device, label="∇τ", seed=cfg["seed"])
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*62}")
     print(f"  {'Metric':<24} {'Before':>9}  {'After':>9}  {'Δ':>7}")
     print(f"{'='*62}")

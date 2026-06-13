@@ -27,7 +27,8 @@ from mucac_dataset import (
 from utils import set_seed
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
+# config
 
 def load_config(path: str) -> dict:
     with open(path) as f:
@@ -59,7 +60,8 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+
+# training
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -86,7 +88,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return avg_loss, mean_acc
 
 
-# ── Checkpoint ────────────────────────────────────────────────────────────────
+
+# checkpointing
 
 def save_checkpoint(model, path, epoch, metrics, cfg, history):
     torch.save({
@@ -110,7 +113,8 @@ def load_mucac_checkpoint(path: str, device: torch.device) -> nn.Module:
     return model
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+
+# entry point
 
 def main():
     args = parse_args()
@@ -131,7 +135,6 @@ def main():
     print(f"  Checkpoints : {cfg['checkpoint_dir']}")
     print(f"{'='*62}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     base = os.path.join(cfg["data_root"], "mucac_dataset")
     train_ds = MuCACDataset(
         csv_path  = os.path.join(base, "train.csv"),
@@ -153,7 +156,6 @@ def main():
     print(f"Train: {len(train_ds):,} samples  |  Test: {len(test_ds):,} samples  "
           f"|  {len(train_loader)} batches/epoch\n")
 
-    # ── Model + optimizer ─────────────────────────────────────────────────────
     model     = build_resnet18_multilabel(len(LABEL_COLS)).to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(),
@@ -165,7 +167,6 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {total_params:,}\n")
 
-    # ── Header ────────────────────────────────────────────────────────────────
     print(f"{'Ep':>3}  {'LR':>8}  {'TrLoss':>7}  {'TrAcc':>6}  "
           f"{'TeAcc':>6}  {'TeF1':>6}  {'TeBal':>6}  "
           f"{'Male_f1':>7}  {'Young_f1':>8}  {'Smil_f1':>7}  {'Time':>5}")
@@ -176,7 +177,6 @@ def main():
     best_path = os.path.join(cfg["checkpoint_dir"], "mucac_best.pth")
     t_start   = time.time()
 
-    # ── Loop ──────────────────────────────────────────────────────────────────
     for epoch in range(1, cfg["num_epochs"] + 1):
         t0 = time.time()
 

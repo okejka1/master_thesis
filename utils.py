@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, Subset
 from models import build_resnet18
 
 
-# ── Normalisation statistics ──────────────────────────────────────────────────
+# normalisation stats
 
 STATS = {
     "CIFAR10":  {"mean": (0.4914, 0.4822, 0.4465),
@@ -33,7 +33,7 @@ STATS = {
 }
 
 
-# ── Reproducibility ──────────────────────────────────────────────────────────
+# reproducibility
 
 def set_seed(seed: int = 42) -> None:
     """Set random seeds for full reproducibility."""
@@ -45,7 +45,7 @@ def set_seed(seed: int = 42) -> None:
     torch.backends.cudnn.benchmark = False
 
 
-# ── Dataset helpers ───────────────────────────────────────────────────────────
+# datasets
 
 def get_datasets(dataset: str,
                  data_root: str = "./data",
@@ -101,9 +101,9 @@ def get_test_transform(dataset: str):
     ])
 
 
-# ── Evaluation ────────────────────────────────────────────────────────────────
-
 @torch.no_grad()
+# evaluation
+
 def evaluate(model: nn.Module,
              loader: DataLoader,
              criterion: nn.Module,
@@ -188,7 +188,7 @@ def forget_sample_confidences(model: nn.Module,
     return confidences
 
 
-# ── Checkpoint helpers ────────────────────────────────────────────────────────
+# checkpoints
 
 def load_checkpoint(checkpoint_path: str,
                     device: torch.device) -> nn.Module:
@@ -259,7 +259,7 @@ def class_subset_loader(dataset, class_id: int, batch_size: int) -> DataLoader:
                       shuffle=False, num_workers=2, pin_memory=True)
 
 
-# ── SISA helpers ──────────────────────────────────────────────────────────────
+# sisa
 
 def stratified_shard(targets: list | np.ndarray,
                      num_shards: int,
@@ -287,21 +287,18 @@ def stratified_shard(targets: list | np.ndarray,
     targets = np.asarray(targets)
     num_classes = int(targets.max()) + 1
 
-    # Collect indices per class, then shuffle
     class_indices = []
     for c in range(num_classes):
         idx = np.where(targets == c)[0]
         rng.shuffle(idx)
         class_indices.append(idx)
 
-    # Distribute each class's indices round-robin across shards
     shards: list[list[int]] = [[] for _ in range(num_shards)]
     for idx_arr in class_indices:
         chunks = np.array_split(idx_arr, num_shards)
         for s in range(num_shards):
             shards[s].extend(chunks[s].tolist())
 
-    # Shuffle within each shard
     for s in range(num_shards):
         rng.shuffle(shards[s])
 
@@ -343,7 +340,6 @@ def ensemble_evaluate(models: list[nn.Module],
         images, labels = images.to(device), labels.to(device)
 
         if method == "soft_vote":
-            # Average softmax probabilities across all shard models
             avg_probs = None
             for m in models:
                 logits = m(images)
@@ -351,21 +347,17 @@ def ensemble_evaluate(models: list[nn.Module],
                 avg_probs = probs if avg_probs is None else avg_probs + probs
             avg_probs /= len(models)
 
-            # Compute loss on averaged log-probs
             loss = criterion(torch.log(avg_probs + 1e-12), labels)
             preds = avg_probs.argmax(dim=1)
 
         elif method == "majority_vote":
-            # Each model casts a vote; pick the majority
             all_preds = []
             for m in models:
                 logits = m(images)
                 all_preds.append(logits.argmax(dim=1))
-            # Stack → (num_models, batch) and take mode along dim 0
             stacked = torch.stack(all_preds, dim=0)
             preds = torch.mode(stacked, dim=0).values
 
-            # Loss: use the first model's logits as a proxy (no clean loss for majority vote)
             loss = criterion(models[0](images), labels)
 
         else:

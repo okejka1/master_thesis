@@ -34,7 +34,8 @@ from unlearn_naive_mucac import build_forget_retain_indices
 from utils import set_seed
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
+# config
 
 def load_config(path):
     with open(path) as f:
@@ -78,7 +79,8 @@ def merge(cfg, args):
     return cfg
 
 
-# ── Slice helpers (same as train_sisa_mucac) ──────────────────────────────────
+
+# slice helpers
 
 def raw_slices(shard_indices: list[int], num_slices: int) -> list[list[int]]:
     arr = np.array(shard_indices)
@@ -93,7 +95,8 @@ def find_earliest_affected_slice(raw_slice_list: list[list[int]],
     return -1
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+
+# training
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -112,7 +115,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total
 
 
-# ── Shard retrain ─────────────────────────────────────────────────────────────
+
+# shard retraining
 
 def retrain_shard(shard_id, shard_indices, forget_set, train_ds, cfg, device):
     num_slices       = cfg["sisa_slices"]
@@ -200,7 +204,8 @@ def retrain_shard(shard_id, shard_indices, forget_set, train_ds, cfg, device):
     return model, stats
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# helpers
 
 def _write_results(path, payload):
     tmp = path + ".tmp"
@@ -224,7 +229,8 @@ def _print_split(name, m):
           f"Smiling f1={m['Smiling_f1']:.1f}%]")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+
+# entry point
 
 def main():
     args = parse_args()
@@ -261,7 +267,6 @@ def main():
     print(f"  Results out     : {out_dir}")
     print(f"{'='*62}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     base = os.path.join(cfg["data_root"], "mucac_dataset")
     train_aug  = MuCACDataset(base + "/train.csv", base + "/train",
                               transform=_train_transform())
@@ -288,11 +293,9 @@ def main():
     print(f"  Forget: {len(forget_idx):,} samples  ({len(forget_ids)} identities)")
     print(f"  Retain: {len(retain_idx):,} samples\n")
 
-    # ── Load shard assignments ────────────────────────────────────────────────
     with open(os.path.join(sisa_dir, "shard_assignments.json")) as f:
         shards = json.load(f)
 
-    # ── Load original ensemble ────────────────────────────────────────────────
     print("Loading original SISA ensemble...")
     orig_models = []
     for s in range(num_shards):
@@ -319,7 +322,6 @@ def main():
         label="Original", seed=cfg["seed"],
     )
 
-    # ── Identify & retrain affected shards ────────────────────────────────────
     affected = [s for s, idx in enumerate(shards)
                 if forget_set.intersection(idx)]
     print(f"\n  Affected shards: {affected} / {num_shards}")
@@ -348,7 +350,6 @@ def main():
                   f"{st['epochs_retrained']} epochs, "
                   f"{st['retrain_time_s']:.0f}s")
 
-    # ── Evaluate updated ensemble ─────────────────────────────────────────────
     print("\nUpdated ensemble metrics:")
     new_test_m   = ensemble_evaluate_multilabel(updated_models, test_loader,        device)
     new_retain_m = ensemble_evaluate_multilabel(updated_models, retain_eval_loader, device)
@@ -363,7 +364,6 @@ def main():
         label="After SISA", seed=cfg["seed"],
     )
 
-    # ── Load naive retrain time as reference ──────────────────────────────────
     meta_path = os.path.join(sisa_dir, "ensemble_meta.json")
     sisa_train_time = (json.load(open(meta_path)).get("total_time_s", 0)
                        if os.path.exists(meta_path) else 0)

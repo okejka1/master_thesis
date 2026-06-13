@@ -41,7 +41,8 @@ from mia import run_mia_suite_multilabel
 from utils import set_seed
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
+# config
 
 def load_config(path: str) -> dict:
     with open(path) as f:
@@ -79,7 +80,8 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Identity-level forget/retain split ───────────────────────────────────────
+
+# forget / retain split
 
 def build_forget_retain_indices(
     df,
@@ -116,7 +118,8 @@ def build_forget_retain_indices(
     return forget_idx, retain_idx, forget_ids
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+
+# training loop
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -141,7 +144,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total, mean_acc
 
 
-# ── Checkpoint ────────────────────────────────────────────────────────────────
+
+# helpers
 
 def _save_ckpt(model, path, epoch, metrics, cfg, history):
     torch.save({
@@ -172,7 +176,8 @@ def _write_results(path, payload):
     os.replace(tmp, path)
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+
+# entry point
 
 def main():
     args = parse_args()
@@ -191,7 +196,6 @@ def main():
     base_ckpt = (args.base_ckpt
                  or os.path.join(cfg["checkpoint_dir"], "mucac_best.pth"))
 
-    # ── Resume logic ──────────────────────────────────────────────────────────
     _skip_training = False
     _partial: dict = {}
     if os.path.exists(json_path):
@@ -216,7 +220,6 @@ def main():
     print(f"  Output dir      : {cfg['checkpoint_dir']}")
     print(f"{'='*62}\n")
 
-    # ── Datasets ──────────────────────────────────────────────────────────────
     base = os.path.join(cfg["data_root"], "mucac_dataset")
 
     # train_aug: for retraining D_r
@@ -253,7 +256,6 @@ def main():
 
     criterion = nn.BCEWithLogitsLoss()
 
-    # ── Baseline: evaluate original model ─────────────────────────────────────
     print("Loading baseline model...")
     orig_model = _load_model(base_ckpt, device)
 
@@ -271,7 +273,6 @@ def main():
                                         device, label="Baseline",
                                         seed=cfg["seed"])
 
-    # ── Naive retraining ──────────────────────────────────────────────────────
     if not _skip_training:
         print(f"\nRetraining from scratch on D_r "
               f"({len(retain_idx):,} samples, {cfg['num_epochs']} epochs)...\n")
@@ -333,7 +334,6 @@ def main():
     else:
         unlearn_time = _partial.get("unlearn_time_s", 0.0)
 
-    # ── Evaluate naive model ──────────────────────────────────────────────────
     print("\nLoading best naive model...")
     naive_model = _load_model(ckpt_path, device)
 
@@ -351,7 +351,6 @@ def main():
                                        device, label="Naive",
                                        seed=cfg["seed"])
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*62}")
     print(f"  {'Metric':<24} {'Before':>9}  {'After':>9}  {'Δ':>7}")
     print(f"{'='*62}")
@@ -392,7 +391,6 @@ def main():
     print(f"Results saved → {json_path}")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _print_split_metrics(name: str, m: dict) -> None:
     print(f"  {name:<7}  acc={m['mean_acc']:.1f}%  f1={m['mean_f1']:.1f}%  "

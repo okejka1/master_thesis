@@ -15,9 +15,6 @@ Usage
     python train_sisa.py --config configs/cifar10.yaml \
                          --sisa-shards 10 --sisa-slices 20
 
-# On Google Colab (override checkpoint dir to Google Drive):
-    !python train_sisa.py --config configs/cifar10.yaml \
-                          --checkpoint-dir /content/drive/MyDrive/master_thesis/checkpoints
 
 CLI overrides (all optional — default to values in the YAML config):
     --checkpoint-dir PATH
@@ -54,7 +51,8 @@ from utils import (
 )
 
 
-# ── Config loading ────────────────────────────────────────────────────────────
+
+# config
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -99,7 +97,8 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Training loop (same as train.py / unlearn_naive.py) ──────────────────────
+
+# training
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -120,7 +119,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total, 100.0 * correct / total
 
 
-# ── Shard training ────────────────────────────────────────────────────────────
+
+# slice helpers
 
 def slice_shard(shard_indices: list[int],
                 num_slices: int) -> list[list[int]]:
@@ -142,6 +142,8 @@ def slice_shard(shard_indices: list[int],
         cumulative.append(list(so_far))
     return cumulative
 
+
+# shard training
 
 def train_shard(shard_id: int,
                 shard_indices: list[int],
@@ -265,7 +267,8 @@ def train_shard(shard_id: int,
     return model
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+
+# entry point
 
 def main():
     args = parse_args()
@@ -294,7 +297,6 @@ def main():
     print(f"  Checkpoints   : {cfg['checkpoint_dir']}")
     print(f"{'='*65}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     train_ds, test_ds = get_datasets(dataset, cfg["data_root"])
     test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"],
                              shuffle=False, num_workers=2, pin_memory=True)
@@ -305,7 +307,6 @@ def main():
     print(f"Train samples : {len(train_ds):,}")
     print(f"Test  samples : {len(test_ds):,}\n")
 
-    # ── Stratified sharding ───────────────────────────────────────────────────
     shards = stratified_shard(targets, num_shards, seed=cfg["seed"])
 
     # Save shard assignments for later use by unlearn_sisa.py
@@ -321,7 +322,6 @@ def main():
         print(f"  Shard {s}: {len(shard_idx):,} samples  "
               f"(classes represented: {(class_counts > 0).sum()}/{num_classes})")
 
-    # ── Train each shard ──────────────────────────────────────────────────────
     total_start = time.time()
     shard_models = []
 
@@ -336,7 +336,6 @@ def main():
     print(f"  All {num_shards} shards trained in {total_time:.1f}s")
     print(f"{'='*65}")
 
-    # ── Ensemble evaluation ───────────────────────────────────────────────────
     criterion = nn.CrossEntropyLoss()
 
     # Use NLLLoss for soft_vote since we pass log-probs

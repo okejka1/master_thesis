@@ -77,7 +77,7 @@ from utils import (
 DROP_FILL = -30.0
 
 
-# ── Config helpers ────────────────────────────────────────────────────────────
+# config
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -142,7 +142,7 @@ def ovr_epochs_of(cfg: dict) -> int:
     return cfg.get("ovr_epochs") or cfg["num_epochs"]
 
 
-# ── Binary sub-model ──────────────────────────────────────────────────────────
+# binary sub-model
 
 def build_ovr_binary() -> nn.Module:
     """ResNet-18 (CIFAR stem) with a single-logit head for binary one-vs-rest."""
@@ -157,7 +157,7 @@ def load_binary(path: str, device: torch.device) -> nn.Module:
     return m
 
 
-# ── Positives / negatives per class ─────────────────────────────────────────
+# positives / negatives
 
 def build_pos_neg(targets: np.ndarray,
                   num_classes: int,
@@ -204,7 +204,7 @@ def build_pos_neg(targets: np.ndarray,
     return assignment
 
 
-# ── Binary view dataset ───────────────────────────────────────────────────────
+# binary dataset
 
 class BinaryView(Dataset):
     """Wraps a base dataset, yielding (image, binary_label_float) for the given
@@ -240,7 +240,7 @@ def balanced_loader(base, pos: list[int], neg: list[int],
                       num_workers=2, pin_memory=True)
 
 
-# ── One binary training run ───────────────────────────────────────────────────
+# training
 
 def train_binary_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -338,7 +338,7 @@ def train_binary_model(class_id: int,
     return model
 
 
-# ── The ensemble adapter ──────────────────────────────────────────────────────
+# ensemble adapter
 
 class OvREnsemble(nn.Module):
     """Wrap c binary sub-models; forward() returns (B, c) class logits so that all
@@ -366,7 +366,7 @@ class OvREnsemble(nn.Module):
         return logits.masked_fill(mask, DROP_FILL)
 
 
-# ── Forget set construction (identical semantics to unlearn_naive/sisa) ──────
+# forget set
 
 def build_forget_indices(targets: np.ndarray,
                          num_train: int,
@@ -382,7 +382,7 @@ def build_forget_indices(targets: np.ndarray,
     raise ValueError(f"Unknown forget strategy: {strategy!r}")
 
 
-# ── Sub-model retraining (drop_neg_retrain / slice_resume) ──────────────────
+# sub-model retraining
 
 def retrain_binary_model(class_id: int,
                          pos: list[int],
@@ -503,7 +503,7 @@ def resume_binary_from_slice(class_id: int,
     return model, stats
 
 
-# ── OVR-specific metrics ──────────────────────────────────────────────────────
+# ovr metrics
 
 def negative_footprint(assignment: dict, forgotten_classes: list[int],
                        active_classes: list[int]) -> dict:
@@ -533,7 +533,7 @@ def negative_footprint(assignment: dict, forgotten_classes: list[int],
     }
 
 
-# ── Eval bundle (one ensemble snapshot → all metrics) ───────────────────────
+# evaluation bundle
 
 def evaluate_snapshot(ensemble, num_classes, device,
                       test_loader, retain_loader, forget_loader, seed,
@@ -557,7 +557,7 @@ def evaluate_snapshot(ensemble, num_classes, device,
     }
 
 
-# ── Results writer ────────────────────────────────────────────────────────────
+# results
 
 def _write_results(path: str, payload: dict) -> None:
     tmp = path + ".tmp"
@@ -566,9 +566,7 @@ def _write_results(path: str, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-# ════════════════════════════════════════════════════════════════════════════
-#  MODE: train
-# ════════════════════════════════════════════════════════════════════════════
+# train mode
 
 def run_train(cfg: dict, device: torch.device):
     dataset = cfg["dataset"]
@@ -625,9 +623,7 @@ def run_train(cfg: dict, device: torch.device):
     print(f"\nEnsemble metadata → {ovr_dir}/ensemble_meta.json")
 
 
-# ════════════════════════════════════════════════════════════════════════════
-#  MODE: unlearn
-# ════════════════════════════════════════════════════════════════════════════
+# unlearn mode
 
 def run_unlearn(cfg: dict, device: torch.device):
     dataset = cfg["dataset"]
@@ -656,7 +652,6 @@ def run_unlearn(cfg: dict, device: torch.device):
     print(f"  Results out     : {out_dir}")
     print(f"{'='*65}\n")
 
-    # ── Data ──────────────────────────────────────────────────────────────────
     train_ds, test_ds = get_datasets(dataset, cfg["data_root"])
     targets = np.array(train_ds.targets)
     DatasetClass = (torchvision.datasets.CIFAR10 if dataset == "CIFAR10"
@@ -676,7 +671,6 @@ def run_unlearn(cfg: dict, device: torch.device):
     retain_indices = [i for i in range(len(train_ds)) if i not in forget_set]
     print(f"Forget set : {len(forget_indices):,} samples")
     print(f"Retain set : {len(retain_indices):,} samples\n")
-
     forget_loader = DataLoader(torch.utils.data.Subset(full_eval, forget_indices),
                                batch_size=cfg["batch_size"], shuffle=False,
                                num_workers=2, pin_memory=True)
@@ -686,7 +680,6 @@ def run_unlearn(cfg: dict, device: torch.device):
     mia_test_loader = (class_subset_loader(test_ds, cfg["forget_class"], cfg["batch_size"])
                        if strategy == "class" else None)
 
-    # ── Load original ensemble ──────────────────────────────────────────────
     print("Loading original OVR ensemble...")
     submodels = [load_binary(os.path.join(ovr_dir, f"class_{i}", "model.pth"),
                              device) for i in range(c)]
@@ -697,7 +690,6 @@ def run_unlearn(cfg: dict, device: torch.device):
                                retain_loader, forget_loader, cfg["seed"],
                                mia_test_loader=mia_test_loader)
 
-    # ── Unlearn ──────────────────────────────────────────────────────────────
     print(f"\n{'='*65}\n  Unlearning — variant = {variant}\n{'='*65}")
     unlearn_start = time.time()
     shard_stats = []
@@ -751,20 +743,17 @@ def run_unlearn(cfg: dict, device: torch.device):
     unlearn_time = time.time() - unlearn_start
     print(f"\n  Unlearning completed in {unlearn_time:.1f}s")
 
-    # ── Evaluate updated ensemble ────────────────────────────────────────────
     print("\nEvaluating updated ensemble...")
     after = evaluate_snapshot(ensemble, c, device, test_loader,
                               retain_loader, forget_loader, cfg["seed"],
                               mia_test_loader=mia_test_loader)
 
-    # ── OVR-specific metrics ─────────────────────────────────────────────────
     ovr_specific = {}
     if strategy == "class":
         forgotten = sorted({int(targets[i]) for i in forget_indices})
         ovr_specific.update(negative_footprint(
             assignment, forgotten, ensemble.active_classes))
 
-    # ── Side-by-side table ───────────────────────────────────────────────────
     print(f"\n{'='*68}")
     print(f"{'Metric':<22} {'Before':>12}  {'After':>12}  {'Δ':>7}")
     print(f"{'='*68}")
@@ -802,7 +791,7 @@ def run_unlearn(cfg: dict, device: torch.device):
     print(f"\n  Results saved → {results_path}")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# entry point
 
 def main():
     args = parse_args()

@@ -39,7 +39,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 
-# ── Feature extraction ────────────────────────────────────────────────────────
+# feature extraction
+
+# mucac
 
 @torch.no_grad()
 def _compute_features(
@@ -119,7 +121,6 @@ def _compute_features_ensemble(
     for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
 
-        # Average softmax probabilities across all shards
         avg_probs = None
         for m in models:
             probs     = F.softmax(m(images), dim=1)
@@ -139,7 +140,7 @@ def _compute_features_ensemble(
     return np.concatenate(features)
 
 
-# ── Binary attacker ───────────────────────────────────────────────────────────
+# attacker
 
 def _train_attacker(
     forget_features: np.ndarray,
@@ -168,7 +169,7 @@ def _train_attacker(
     """
     rng = np.random.RandomState(seed)
 
-    # ── Balance classes: subsample the larger set to match the smaller ────────
+    # Balance classes: subsample the larger set to match the smaller.
     # For sample-wise: test >> forget → subsample test (original behaviour).
     # For class-wise with same-class test set: forget (~5k) > test (~1k) →
     # subsample forget instead so the attacker sees a balanced 1:1 split.
@@ -193,7 +194,7 @@ def _train_attacker(
     return float(scores.mean())
 
 
-# ── Public API — single model ─────────────────────────────────────────────────
+# single model
 
 def mia_attack(
     model: nn.Module,
@@ -258,7 +259,7 @@ def run_mia_suite(
     return {"mia_l": mia_l, "mia_e": mia_e}
 
 
-# ── Public API — SISA ensemble ────────────────────────────────────────────────
+# sisa ensemble
 
 def mia_attack_ensemble(
     models: list,
@@ -323,8 +324,6 @@ def run_mia_suite_ensemble(
     _print_mia(prefix, mia_l, mia_e)
     return {"mia_l": mia_l, "mia_e": mia_e}
 
-
-# ── Multi-label feature extraction (MUCAC) ───────────────────────────────────
 
 @torch.no_grad()
 def _compute_features_multilabel(
@@ -406,7 +405,6 @@ def _compute_features_multilabel_ensemble(
         ).mean(dim=0)                             # (B, L)
 
         if method == "loss":
-            # Binary CE from averaged probabilities
             vals = -(labels * torch.log(avg_probs + 1e-12)
                      + (1 - labels) * torch.log(1 - avg_probs + 1e-12)
                      ).sum(dim=1)                 # (B,)
@@ -472,7 +470,7 @@ def run_mia_suite_multilabel(
     return {"mia_l": mia_l, "mia_e": mia_e}
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# helpers
 
 def _print_mia(prefix: str, mia_l: float, mia_e: float) -> None:
     """Pretty-print MIA results with a quality indicator."""

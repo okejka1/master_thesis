@@ -45,7 +45,7 @@ from utils import (STATS, class_subset_loader, evaluate, forget_sample_confidenc
 from mia import run_mia_suite
 
 
-# ── Config helpers ────────────────────────────────────────────────────────────
+# config
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -94,7 +94,7 @@ def merge(cfg: dict, args) -> dict:
     return cfg
 
 
-# ── Forget/retain split ───────────────────────────────────────────────────────
+# forget / retain split
 
 def build_forget_retain_indices(train_dataset,
                                 strategy: str,
@@ -131,7 +131,7 @@ def build_forget_retain_indices(train_dataset,
     return forget_indices, retain_indices
 
 
-# ── Training loop (identical to train.py's) ───────────────────────────────────
+# training loop
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -152,7 +152,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / total, 100.0 * correct / total
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# entry point
 
 def _write_results(path: str, payload: dict) -> None:
     """Atomically write results JSON (write to tmp then rename)."""
@@ -183,7 +183,6 @@ def main():
     naive_best_ckpt = os.path.join(cfg["checkpoint_dir"],
                                    f"resnet18_{ds_tag}_naive_unlearn_best.pth")
 
-    # ── Resume logic ───────────────────────────────────────────────────────────
     # status="complete"           → skip entirely (MIA already done)
     # status="training_complete"  → skip retraining, redo only eval + MIA
     _skip_training = False
@@ -214,7 +213,6 @@ def main():
     print(f"  Checkpoints     : {cfg['checkpoint_dir']}")
     print(f"{'='*65}\n")
 
-    # ── Data ───────────────────────────────────────────────────────────────────
     # Two versions of train set:
     #   full_train   — augmented transforms   → used as base for Subset loaders
     #   full_eval    — no augmentation        → used for retain *evaluation*
@@ -239,7 +237,6 @@ def main():
     print(f"Retain set size : {len(retain_indices):,}")
     print(f"Test   set size : {len(test_ds):,}\n")
 
-    # Loaders
     bs = cfg["batch_size"]
     retain_loader      = DataLoader(Subset(full_train, retain_indices),
                                     batch_size=bs, shuffle=True,
@@ -259,7 +256,6 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
 
-    # ── Baseline: evaluate original model ──────────────────────────────────────
     print("Loading original model...")
     original_model = load_checkpoint(original_ckpt, device)
 
@@ -284,7 +280,6 @@ def main():
     orig_per_class_forget = per_class_accuracy(original_model, forget_loader,      num_classes, device).tolist()
     orig_forget_conf      = forget_sample_confidences(original_model, forget_loader, device)
 
-    # ── Naive unlearning: retrain from scratch on retain set ───────────────────
     if _skip_training:
         # Training was already completed in a previous session; reload partial data.
         print("[naive] Skipping training (loading from previous training_complete state).")
@@ -363,7 +358,7 @@ def main():
 
         print(f"\nRetraining complete. Best test accuracy: {best_naive_acc:.2f}%")
 
-        # ── Phase-1 write: training done, MIA pending ─────────────────────────
+        # Phase-1 write: training done, MIA pending.
         # Writing now means a session crash during MIA won't force a full retrain.
         _write_results(results_path, {
             "status":          "training_complete",
@@ -400,7 +395,6 @@ def main():
         })
         print(f"  Phase-1 results written → {results_path}")
 
-    # ── Evaluate naive model ───────────────────────────────────────────────────
     print("\nLoading best naive unlearned model...")
     naive_model = load_checkpoint(naive_best_ckpt, device)
 
@@ -419,7 +413,6 @@ def main():
     new_per_class_forget = per_class_accuracy(naive_model, forget_loader,      num_classes, device).tolist()
     new_forget_conf      = forget_sample_confidences(naive_model, forget_loader, device)
 
-    # ── Side-by-side comparison ────────────────────────────────────────────────
     print(f"\n{'='*68}")
     print(f"{'Metric':<22} {'Original':>12}  {'Naive Retrain':>14}  {'Δ':>6}")
     print(f"{'='*68}")
@@ -448,7 +441,6 @@ def main():
     print(f"{'='*68}")
     print(f"\nBest naive checkpoint: {naive_best_ckpt}")
 
-    # ── Phase-2 write: fully complete ─────────────────────────────────────────
     _write_results(results_path, {
         "status":          "complete",
         "dataset":         dataset,

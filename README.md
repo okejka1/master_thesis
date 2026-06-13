@@ -1,178 +1,119 @@
 # Machine Unlearning for Multi-Class Image Classification
 
-**Master's Thesis — Mikołaj Hajder 264478**
+Master's thesis — Mikołaj Hajder 264478
 
-Analysis and comparison of machine unlearning methods for multi-class image classification models, evaluated on CIFAR-10 and CIFAR-100 using ResNet-18.
+This repo contains the code I wrote for my thesis comparing different machine unlearning methods on image classification. The main idea is: given a trained model, how do you remove the influence of some training samples without retraining from scratch? I'm testing this on CIFAR-10 and CIFAR-100 with ResNet-18.
 
 ---
 
-## Repository Structure
+## Repo structure
 
 ```
 master_thesis/
-├── train.py                         ← CLI: train ResNet-18 baseline
-├── train_sisa.py                    ← CLI: train SISA shard ensemble
-├── unlearn_naive.py                 ← CLI: naive (retrain-from-scratch) unlearning + MIA
-├── unlearn_sisa.py                  ← CLI: SISA-based unlearning + MIA
-├── unlearn_grad_tau.py              ← CLI: ∇τ gradient-based unlearning + MIA
-├── mia.py                           ← Membership Inference Attack evaluation module
-├── models.py                        ← Model architectures (ResNet-18)
-├── utils.py                         ← Shared utilities (eval, checkpoints, data)
+├── train.py                     ← train baseline ResNet-18
+├── train_sisa.py                ← train SISA shard ensemble
+├── train_mucac.py               ← train baseline on MUCAC (CelebA multi-label)
+├── train_sisa_mucac.py          ← SISA training for MUCAC
+├── unlearn_naive.py             ← naive retrain from scratch + MIA eval
+├── unlearn_sisa.py              ← SISA unlearning + MIA eval
+├── unlearn_grad_tau.py          ← ∇τ gradient-based unlearning + MIA eval
+├── unlearn_naive_mucac.py       ← naive unlearning for MUCAC
+├── unlearn_sisa_mucac.py        ← SISA unlearning for MUCAC
+├── unlearn_grad_tau_mucac.py    ← ∇τ unlearning for MUCAC
+├── ovr.py                       ← OVR (one-vs-rest) ensemble method
+├── mia.py                       ← membership inference attack evaluation
+├── mucac_dataset.py             ← dataset class + loaders for MUCAC
+├── models.py                    ← ResNet-18 definition
+├── utils.py                     ← shared stuff (eval, checkpoints, data loaders)
+├── run_sweep.py                 ← run full sweep over all methods/fractions
+├── run_sweep_mucac.py           ← same but for MUCAC
+├── reeval_mia_classwise.py      ← re-run MIA evaluation per class
+├── evaluate_plots.py            ← generate plots for thesis
 ├── configs/
-│   ├── cifar10.yaml                 ← Hyperparameters for CIFAR-10
-│   └── cifar100.yaml                ← Hyperparameters for CIFAR-100
-├── notebooks/
-│   ├── runner_kaggle.ipynb          ← Kaggle experiment launcher (training + unlearning)
-│   └── results_analysis_kaggle.ipynb← Plotting, MIA charts & thesis figures
-├── requirements.txt
-├── README.md
-└── .gitignore
 ```
 
-> **Checkpoints and data** are not tracked in this repo. They are generated locally or on Kaggle and saved to the configured `--checkpoint-dir`.
+Checkpoints and data are not tracked — they're generated locally or on Kaggle and stored in `--checkpoint-dir`.
 
 ---
 
 ## Setup
 
-### Local
-
 ```bash
 git clone https://github.com/okejka1/master_thesis.git
 cd master_thesis
-python -m venv .venv && source .venv/bin/activate   # Linux/macOS
-# python -m venv .venv && .venv\Scripts\activate    # Windows
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Kaggle
-
-Open `notebooks/runner_kaggle.ipynb` in a Kaggle notebook session.  
-The notebook handles: cloning the repo, installing dependencies, and running all experiments.  
-Checkpoints are saved to `/kaggle/working/checkpoints/` and accessible from the **Output** tab.
+Experiments are run locally. Checkpoints are saved to `./checkpoints/` by default (can be changed with `--checkpoint-dir`).
 
 ---
 
-## Running Experiments
+## Running things
 
-All training and unlearning is launched from the command line.
+Order matters — unlearning scripts need a trained model first.
 
-### 1. Train baseline model
+### Train first
 
 ```bash
-# CIFAR-10
 python train.py --config configs/cifar10.yaml
-
-# CIFAR-100
-python train.py --config configs/cifar100.yaml
+python train_sisa.py --config configs/cifar10.yaml   # needed for SISA unlearning
 ```
 
-### 2. Train SISA ensemble
+### Unlearning
 
 ```bash
-# CIFAR-10 (5 shards, 10 slices each)
-python train_sisa.py --config configs/cifar10.yaml
-
-# CIFAR-100
-python train_sisa.py --config configs/cifar100.yaml
-```
-
-### 3. Naive unlearning — retrain from scratch on retain set
-
-```bash
-# Random forget set (1% of training data, CIFAR-10)
+# retrain from scratch on the retain set (upper bound reference)
 python unlearn_naive.py --config configs/cifar10.yaml
 
-# Class-wise forget (forget class 0 = 'airplane')
-python unlearn_naive.py --config configs/cifar10.yaml \
-                        --forget-strategy class \
-                        --forget-class 0
-```
-
-### 4. SISA unlearning — retrain only affected shards
-
-```bash
-# Requires train_sisa.py to have been run first
+# SISA — only retrains the affected shard (faster than naive)
 python unlearn_sisa.py --config configs/cifar10.yaml
 
-# Class-wise forget
-python unlearn_sisa.py --config configs/cifar10.yaml \
-                       --forget-strategy class \
-                       --forget-class 0
+# ∇τ — gradient-based, no retraining needed
+python unlearn_grad_tau.py --config configs/cifar10.yaml
 ```
 
-### 5. ∇τ gradient-based approximate unlearning
+Class-wise forgetting (forget all samples of one class):
 
 ```bash
-# Requires train.py to have been run first (uses resnet18_cifar10_best.pth)
-python unlearn_grad_tau.py --config configs/cifar10.yaml
-
-# CIFAR-100
-python unlearn_grad_tau.py --config configs/cifar100.yaml
+python unlearn_naive.py --config configs/cifar10.yaml \
+    --forget-strategy class --forget-class 0
 ```
 
-### 6. Analyse results
+### Run everything at once
 
-Open `notebooks/results_analysis_kaggle.ipynb`, set `CKPT_DIR` to your checkpoint folder, and run all cells to reproduce comparison tables, MIA charts, and thesis figures.
+`run_sweep.py` loops over all methods, forget fractions, and seeds:
+
+```bash
+python run_sweep.py --config configs/cifar10.yaml --seeds 0 1 2
+```
 
 ---
 
-## Configuration
+## Methods
 
-All hyperparameters live in `configs/*.yaml`. Any value can be overridden via CLI flag:
-
-| YAML key | CLI flag | Default |
+| Script | Method | Paper |
 |---|---|---|
-| `checkpoint_dir` | `--checkpoint-dir` | `./checkpoints` |
-| `data_root` | `--data-root` | `./data` |
-| `num_epochs` | `--epochs` | `100` |
-| `lr` | `--lr` | `0.1` |
-| `batch_size` | `--batch-size` | `128` |
-| `forget_strategy` | `--forget-strategy` | `random` |
-| `forget_fraction` | `--forget-fraction` | `0.01` |
-| `forget_class` | `--forget-class` | `0` |
-| `grad_tau_forget_epochs` | `--forget-epochs` | `10` |
-| `grad_tau_alpha` | `--alpha` | `0.5` |
+| `train.py` | Baseline ResNet-18 | — |
+| `unlearn_naive.py` | Retrain from scratch | — |
+| `train_sisa.py` + `unlearn_sisa.py` | SISA | Bourtoule et al. 2021 |
+| `unlearn_grad_tau.py` | ∇τ | Trippa et al. 2024 |
+| `ovr.py` | OVR (one-vs-rest ensemble) | — |
+
+MUCAC variants (`*_mucac.py`) apply the same methods to a multi-label CelebA subset with identity-based forgetting.
 
 ---
 
-## Implemented Methods
+## Evaluation
 
-| Script | Method | Paper | Status |
-|---|---|---|---|
-| `train.py` | Baseline ResNet-18 training | — | ✅ |
-| `unlearn_naive.py` | Naive retrain-from-scratch | — | ✅ |
-| `train_sisa.py` + `unlearn_sisa.py` | SISA ensemble unlearning | Bourtoule et al. (2021) | ✅ |
-| `unlearn_grad_tau.py` | ∇τ gradient-based approximate unlearning | Trippa et al. (2024) | ✅ |
+Each method is evaluated on three splits: test set, retain set ($D_r = D_{train} \setminus D_f$), and forget set $D_f$.
 
----
+The main metric besides accuracy is **MIA** (Membership Inference Attack). A logistic regression classifier tries to distinguish forget-set samples from test-set samples using either per-sample loss (MIA_L) or entropy (MIA_E) as features. 5-fold CV, classes balanced by subsampling.
 
-## Evaluation Metrics
+- ~50% → good, attacker can't tell if the samples were in training
+- ~80%+ → bad, model still "remembers" the forget set
 
-Each unlearning method is evaluated on three data splits:
-
-| Split | Description |
-|---|---|
-| **Retain set** $D_r$ | $D_\text{train} \setminus D_f$ — model should still perform well here |
-| **Forget set** $D_f$ | Samples to be unlearned — accuracy should drop toward random chance |
-| **Test set** $D_{test}$ | Held-out data — generalisation should be preserved |
-
-### Membership Inference Attack (MIA)
-
-All unlearning scripts automatically run a **Membership Inference Attack** (implemented in `mia.py`) before and after unlearning. Following Trippa et al. (2024), Kurmanji et al. (2023), and Foster et al. (2023):
-
-- **MIA_L** — Loss-based attack: a Logistic Regression classifier is trained to distinguish forget-set samples from test-set samples using per-sample cross-entropy loss as the feature.
-- **MIA_E** — Entropy-based attack: same setup but uses Shannon entropy of the softmax output.
-
-The classifier is evaluated with **5-fold stratified cross-validation**. The forget set and test set are balanced by subsampling the test set to match the size of the forget set.
-
-| MIA Score | Interpretation |
-|---|---|
-| **~50%** | ✅ Ideal — attacker cannot distinguish forget set from test set |
-| **~60–80%** | ⚠️ Partial forgetting — model still partially memorises $D_f$ |
-| **~80–100%** | ❌ Poor unlearning — forget set clearly distinguishable |
-
-MIA scores are saved alongside accuracy metrics in each method's result JSON file.
+MIA scores are saved to each method's result JSON together with accuracy.
 
 ---
 
@@ -181,4 +122,3 @@ MIA scores are saved alongside accuracy metrics in each method's result JSON fil
 - Bourtoule et al. (2021) — *Machine Unlearning* (SISA)
 - Trippa et al. (2024) — *∇τ: Gradient-Based Private Unlearning* — [arXiv:2403.14339](https://arxiv.org/abs/2403.14339)
 - Kurmanji et al. (2023) — *Towards Unbounded Machine Unlearning* (SCRUB)
-- Foster et al. (2023) — *Fast Machine Unlearning Without Retraining* (SSD)

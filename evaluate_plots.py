@@ -1,19 +1,6 @@
 """
-evaluate_plots.py — Generuje wykresy wyników oduczania maszynowego do pracy magisterskiej.
+evaluate_plots.py — Script to generate plots from the exctracted results
 
-Wczytuje dane z plików JSON (class-wise i sample-wise) oraz CSV w results/.
-Wykresy zapisywane jako PDF + PNG do results/plots/.
-
-Wygenerowane pliki:
-  fig_mia_dumbbell_po50_{cifar10,cifar100}      — dumbbell: po vs ideał
-  fig_mia_dumbbell_poprzed_{cifar10,cifar100}   — dumbbell: przed → po
-  fig_speedup_{cifar10,cifar100}   — przyspieszenie log-log vs frakcja (osobno per dataset)
-  fig_tradeoff                     — scatter: A(Df) vs A(Dt)
-  fig_time                         — czasy bezwzględne (skala log)
-  fig_classwise_{ds}               — słupki po oduczeniu: test/retain/forget, klasowe
-  fig_ba_class_{ds}                — przed i po: forget + test acc, klasowe
-  fig_ba_sample_{ds}               — przed i po: forget + test acc, próbkowe (per frakcja)
-  fig_per_class_heatmap_{ds}       — heatmapa zmiany dokładności per klasa
 """
 
 import json
@@ -42,11 +29,6 @@ METHODS = ["naive_retrain", "grad_tau", "sisa"]
 
 MIA_UNRELIABLE = 50
 MIA_LIMITED = 500
-
-
-# ---------------------------------------------------------------------------
-# Pomocnicze
-# ---------------------------------------------------------------------------
 
 def mia_reliability(forget_size: int) -> str:
     if forget_size < MIA_UNRELIABLE:
@@ -132,9 +114,6 @@ def _shade_mia_reliability(ax, runs) -> list:
     return legend_handles
 
 
-# ---------------------------------------------------------------------------
-# Ładowanie danych
-# ---------------------------------------------------------------------------
 
 def load_sample_runs(dataset_key: str) -> list:
     path = CHECKPOINTS / "seed_0" / f"seed_0_{dataset_key}_sample_wise_results.json"
@@ -247,10 +226,6 @@ def load_class_runs(dataset_key: str) -> list:
     out.sort(key=lambda r: (r["forget_class"], METHOD_ORDER.get(r["method"], 9)))
     return out
 
-
-# ---------------------------------------------------------------------------
-# Wykresy próbkowe (sample-wise)
-# ---------------------------------------------------------------------------
 
 def _mia_fig_legend(fig, handles, ncol=4):
     """Umieszcza wspólną legendę pod panelami wykresu MIA."""
@@ -533,10 +508,6 @@ def plot_time(sample_runs_c10, sample_runs_c100):
     _save(fig, "fig_time")
 
 
-# ---------------------------------------------------------------------------
-# Wykresy klasowe (class-wise)
-# ---------------------------------------------------------------------------
-
 def plot_classwise(class_runs, dataset_name, filename_base):
     """Słupki: dokładność testowa/retencyjna/zapomnienia po oduczeniu, per zapomniana klasa."""
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 5))
@@ -690,9 +661,6 @@ def plot_ba_sample(sample_runs, dataset_name, filename_base):
     _save(fig_t, f"{filename_base}_dt")
 
 
-# ---------------------------------------------------------------------------
-# Wykresy z danych bogatych (JSON class-wise)
-# ---------------------------------------------------------------------------
 
 def plot_per_class_heatmap(class_runs, dataset_name, filename_base,
                            max_rows: int = 20):
@@ -813,7 +781,6 @@ def plot_confidence_distributions(class_runs, dataset_name, filename_base, num_c
     n_samples = sum(len(v) for v in before_by_method.values()) // len(METHODS)
     subtitle = f"(agregacja {n_forget_classes} klas zapomnienia, N={n_samples:,} próbek)"
 
-    # ── Figure 1: BEFORE ────────────────────────────────────────────────────
     fig_b, axes_b = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
     for col_idx, method in enumerate(METHODS):
         ax = axes_b[col_idx]
@@ -837,7 +804,6 @@ def plot_confidence_distributions(class_runs, dataset_name, filename_base, num_c
     plt.tight_layout()
     _save(fig_b, f"{filename_base}_before")
 
-    # ── Figure 2: AFTER ─────────────────────────────────────────────────────
     fig_a, axes_a = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
     for col_idx, method in enumerate(METHODS):
         ax = axes_a[col_idx]
