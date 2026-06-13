@@ -200,10 +200,7 @@ Because labels are imbalanced (Young is ~77% positive), accuracy alone is mislea
 
 | Metric | Description |
 |---|---|
-| Accuracy | Fraction of correct binary predictions per label |
-| F1 | Harmonic mean of precision and recall per label |
 | Balanced accuracy | Average of recall and specificity per label |
-| Mean acc / F1 / bal_acc | Average of the three per-label values |
 
 Threshold: `logit > 0` (equivalent to `sigmoid(logit) > 0.5`).
 
@@ -214,7 +211,6 @@ A logistic regression classifier tries to distinguish forget-set samples from te
 For multi-label models, loss is the mean BCE across all labels; entropy is the mean binary entropy across all labels.
 
 - ~50% → good, attacker can't tell if the samples were in training
-- ~80%+ → bad, model still "remembers" the forget set
 
 MIA scores are saved to each method's result JSON together with the split metrics.
 
